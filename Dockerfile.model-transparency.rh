@@ -3,6 +3,8 @@ ARG BUILD_TYPE=minimal
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS base_builder
 
+USER root
+
 RUN dnf install -y --setopt=tsflags=nodocs \
     gcc-c++ \
     swig \
