@@ -10,7 +10,7 @@ RUN pip install .
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS minimal_image
 COPY --from=minimal_install /usr/local/bin /usr/local/bin
-COPY --from=minimal_install /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=minimal_install /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 FROM ${BUILD_TYPE}_image AS final_image
 
