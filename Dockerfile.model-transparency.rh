@@ -3,30 +3,14 @@ ARG BUILD_TYPE=minimal
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS base_builder
 
-USER root
-
-RUN dnf install -y --setopt=tsflags=nodocs \
-    gcc-c++ \
-    swig \
-    && dnf clean all
-
 FROM base_builder AS minimal_install
 WORKDIR /app
 COPY . /app
 RUN pip install .
 
-FROM base_builder AS full_install
-WORKDIR /app
-COPY . /app
-RUN pip install .[pkcs11,otel]
-
 FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS minimal_image
 COPY --from=minimal_install /usr/local/bin /usr/local/bin
 COPY --from=minimal_install /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS full_image
-COPY --from=full_install /usr/local/bin /usr/local/bin
-COPY --from=full_install /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 
 FROM ${BUILD_TYPE}_image AS final_image
 
