@@ -45,6 +45,9 @@ jobs:
         persist-credentials: false
     - name: Set up Hatch
       uses: pypa/hatch@257e27e51a6a5616ed08a39a408a21c35c9931bc
+    - name: Enable Git long paths on Windows
+      if: runner.os == 'Windows'
+      run: git config --global core.longpaths true
     - name: Run integration tests
       run: |
         set -euxo pipefail
