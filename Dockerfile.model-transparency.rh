@@ -1,14 +1,14 @@
 # Default
 ARG BUILD_TYPE=minimal
 
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS base_builder
+FROM registry.access.redhat.com/ubi9/python-312@sha256:fc9702e64d88c030b19b2298a5b6604bd2a5ac9f210833691cdaac3a43e29a2d AS base_builder
 
 FROM base_builder AS minimal_install
 WORKDIR /app
 COPY . /app
 RUN pip install .
 
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS minimal_image
+FROM registry.access.redhat.com/ubi9/python-312@sha256:fc9702e64d88c030b19b2298a5b6604bd2a5ac9f210833691cdaac3a43e29a2d AS minimal_image
 
 COPY --from=minimal_install /opt/app-root/bin /opt/app-root/bin
 COPY --from=minimal_install /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
