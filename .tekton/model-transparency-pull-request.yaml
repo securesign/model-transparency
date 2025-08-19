@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: prefetch-input
-    value: '{"type": "pip", "path": ".", "allow_binary": true}'
+    value: '{"type": "pip", "path": "."}'
   - name: output-image
     value: quay.io/securesign/model-transparency:on-pr-{{revision}}
   - name: image-expires-after
@@ -32,8 +32,6 @@ spec:
     value: Dockerfile.model-transparency.rh
   - name: path-context
     value: .
-  - name: hermetic
-    value: "true"
   - name: build-source-image
     value: "true"
   pipelineRef:
