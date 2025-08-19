@@ -214,7 +214,7 @@ class Verifier(signing.Verifier):
         self._verifier = sigstore_verifier.Verifier(
             trusted_root=signing_cfg.trusted_root
         )
-       
+
         self._policy = sigstore_verifier.policy.Identity(
             identity=identity, issuer=oidc_issuer
         )

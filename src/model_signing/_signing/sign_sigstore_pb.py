@@ -113,7 +113,7 @@ class Signature(signing.Signature):
         content = path.read_text()
         inner = bundle_pb.Bundle.from_dict(json.loads(content))
         return cls(inner)
-   
+
 
 class Signer(signing.Signer):
     """Signer for traditional signing.
