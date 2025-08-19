@@ -32,7 +32,7 @@ dependencies = [
   "click",
   "cryptography",
   "in-toto-attestation",
-  "sigstore @ git+https://github.com/sigstore/sigstore-python.git@main",
+  "sigstore @ git+https://github.com/sigstore/sigstore-python.git@77c4b8c6",
   "typing_extensions",
 ]
 requires-python = ">=3.9"
