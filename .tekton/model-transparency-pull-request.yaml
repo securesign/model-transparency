@@ -22,8 +22,6 @@ spec:
     value: '{{source_url}}'
   - name: revision
     value: '{{revision}}'
-  - name: prefetch-input
-    value: '{"type": "pip", "path": "."}'
   - name: output-image
     value: quay.io/securesign/model-transparency:on-pr-{{revision}}
   - name: image-expires-after
