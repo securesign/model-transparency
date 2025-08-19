@@ -1,27 +1,21 @@
-# Default
-ARG BUILD_TYPE=minimal
+FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS builder
 
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS base_builder
-
-FROM base_builder AS minimal_install
 WORKDIR /app
 COPY . /app
 RUN pip install .
 
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS minimal_image
+FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57
 
-COPY --from=minimal_install /opt/app-root/bin /opt/app-root/bin
-COPY --from=minimal_install /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
-
-FROM ${BUILD_TYPE}_image AS final_image
+COPY --from=builder /opt/app-root/bin /opt/app-root/bin
+COPY --from=builder /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
 
 ENTRYPOINT ["model_signing"]
 CMD ["--help"]
 
-ARG APP_VERSION="1.0.1"
-
-LABEL org.opencontainers.image.title="Model Transparency Library" \
-      org.opencontainers.image.description="Supply chain security for ML" \
-      org.opencontainers.image.version="$APP_VERSION" \
-      org.opencontainers.image.authors="Trusted Artifact Signer" \
-      org.opencontainers.image.licenses="Apache-2.0" \
+LABEL description="Supply chain security for ML"
+LABEL io.k8s.description="Supply chain security for ML"
+LABEL io.k8s.display-name="Model Transparency Library"
+LABEL io.openshift.tags="model transparency security ml"
+LABEL summary="Provides a library for model transparency."
+LABEL com.redhat.component="model-transparency"
+LABEL name="model-transparency"
