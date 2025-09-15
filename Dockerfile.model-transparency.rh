@@ -1,10 +1,10 @@
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57 AS builder
+FROM registry.access.redhat.com/ubi9/python-312@sha256:a3af61fdae215cd8d8f67f8f737064b353dc0592567099de48b3c2563314810d AS builder
 
 WORKDIR /app
 COPY . /app
 RUN pip install .
 
-FROM registry.access.redhat.com/ubi9/python-312@sha256:3ea12c394e70e966aafb7561d0bc5ff3fc20dabf2fd3fda4c4f4d77cbba17e57
+FROM registry.access.redhat.com/ubi9/python-312@sha256:a3af61fdae215cd8d8f67f8f737064b353dc0592567099de48b3c2563314810d
 
 COPY --from=builder /opt/app-root/bin /opt/app-root/bin
 COPY --from=builder /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
