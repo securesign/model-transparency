@@ -23,8 +23,6 @@ spec:
     value: '{{revision}}'
   - name: output-image
     value: quay.io/securesign/model-transparency:{{revision}}
-  - name: image-expires-after
-    value: 5d
   - name: dockerfile
     value: Dockerfile.model-transparency.rh
   - name: path-context
