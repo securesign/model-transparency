@@ -150,11 +150,13 @@ class Signer(signing.Signer):
         3) Interactive OAuth flow
         """
         if self._identity_token:
-            return sigstore_oidc.IdentityToken(self._identity_token)
+            return sigstore_oidc.IdentityToken(
+                self._identity_token, self._client_id
+            )
         if self._use_ambient_credentials:
-            token = sigstore_oidc.detect_credential()
+            token = sigstore_oidc.detect_credential(self._client_id)
             if token:
-                return sigstore_oidc.IdentityToken(token)
+                return sigstore_oidc.IdentityToken(token, self._client_id)
 
         return self._issuer.identity_token(
             force_oob=self._force_oob,
