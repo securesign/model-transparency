@@ -8,6 +8,9 @@ FROM registry.access.redhat.com/ubi9/python-312@sha256:a3af61fdae215cd8d8f67f8f7
 
 COPY --from=builder /opt/app-root/bin /opt/app-root/bin
 COPY --from=builder /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
+COPY LICENSE /licenses/license.txt
+
+USER 65532:65532
 
 ENTRYPOINT ["model_signing"]
 CMD ["--help"]
