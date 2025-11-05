@@ -24,18 +24,12 @@ RUN apt-get update && \
 
 FROM base_builder AS minimal_install
 WORKDIR /app
-COPY src /app/src
-COPY pyproject.toml /app/
-COPY README.md /app/
-COPY LICENSE /app/
+COPY . /app
 RUN pip install .
 
 FROM base_builder AS full_install
 WORKDIR /app
-COPY src /app/src
-COPY pyproject.toml /app/
-COPY README.md /app/
-COPY LICENSE /app/
+COPY . /app
 RUN pip install .[pkcs11,otel]
 
 FROM python:3.13-slim AS minimal_image
