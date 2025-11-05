@@ -1,7 +1,10 @@
 FROM registry.access.redhat.com/ubi9/python-312@sha256:a3af61fdae215cd8d8f67f8f737064b353dc0592567099de48b3c2563314810d AS builder
 
 WORKDIR /app
-COPY . /app
+COPY src /app/src
+COPY pyproject.toml /app/
+COPY README.md /app/
+COPY LICENSE /app/
 RUN pip install .
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:a3af61fdae215cd8d8f67f8f737064b353dc0592567099de48b3c2563314810d

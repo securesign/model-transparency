@@ -20,16 +20,22 @@ FROM python:3.13-slim AS base_builder
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     g++ \
-    swig
+    swig 
 
 FROM base_builder AS minimal_install
 WORKDIR /app
-COPY . /app
+COPY src /app/src
+COPY pyproject.toml /app/
+COPY README.md /app/
+COPY LICENSE /app/
 RUN pip install .
 
 FROM base_builder AS full_install
 WORKDIR /app
-COPY . /app
+COPY src /app/src
+COPY pyproject.toml /app/
+COPY README.md /app/
+COPY LICENSE /app/
 RUN pip install .[pkcs11,otel]
 
 FROM python:3.13-slim AS minimal_image
