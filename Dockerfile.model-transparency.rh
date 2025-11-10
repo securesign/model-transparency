@@ -9,8 +9,8 @@ RUN pip install .
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:d350329565030871c36d24c43533db869e892390fb47dc5c44512a32792dc623
 
-COPY --from=builder /opt/app-root/bin /opt/app-root/bin
-COPY --from=builder /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
+COPY --from=builder --chown=65532:0 /opt/app-root/bin /opt/app-root/bin
+COPY --from=builder --chown=65532:0 /opt/app-root/lib64/python3.12/site-packages /opt/app-root/lib64/python3.12/site-packages
 COPY LICENSE /licenses/license.txt
 
 USER 65532:65532
