@@ -1,4 +1,4 @@
-FROM gcr.io/google.com/cloudsdktool/cloud-sdk:379.0.0-slim@sha256:d844877c7aaa06a0072979230c68417ddb0f27087277f29747c7169d6ed0d2b9
+FROM gcr.io/google.com/cloudsdktool/cloud-sdk:547.0.0-slim@sha256:67b0396db626cfbb0c26069ecc958d5935c04e5d985d931425f8578c0c95f2a7
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install coreutils -y
 COPY . /src
