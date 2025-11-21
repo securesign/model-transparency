@@ -215,66 +215,84 @@ Similarly, for key verification, we can use
 
 #### Signing and Verifying OCI Images
 
-The tool supports signing and verifying OCI model images directly from their manifest without requiring the model files on disk. This is useful for signing images in registries without pulling them.
-
-**Signing from OCI Manifest:**
+The tool supports signing and verifying OCI container images directly from
+registries. Signatures are automatically attached to the registry.
 
 ```bash
-# Get the OCI manifest (from skopeo inspect --raw)
-[...]$ skopeo inspect --raw docker://quay.io/user/model:latest > manifest.json
+# Sign with Sigstore
+[...]$ model_signing sign sigstore quay.io/user/model:latest
 
-# Sign using the manifest
-[...]$ model_signing sign manifest.json
+# Sign with EC key
+[...]$ model_signing sign key quay.io/user/model:latest --private-key key.pem
 ```
 
-**Verifying OCI Images:**
+Registry authentication uses your existing credentials from `~/.docker/config.json`
+or podman's `auth.json`.
 
-You can verify in two ways:
+By default, signatures are attached using the OCI 1.1 Referrers API. For older
+registries, use `--attachment-mode tag`:
 
-1. **Against the OCI manifest** (no files needed):
 ```bash
-[...]$ model_signing verify manifest.json \
-  --signature model.sig \
+[...]$ model_signing sign sigstore quay.io/user/model:latest --attachment-mode tag
+```
+
+Use `--output-mode` to control where signatures are written:
+
+```bash
+# Write signature to file only (no registry attachment)
+[...]$ model_signing sign sigstore quay.io/user/model:latest \
+  --output-mode file --signature model.sig
+
+# Attach to registry AND write to file
+[...]$ model_signing sign sigstore quay.io/user/model:latest \
+  --output-mode both --signature model.sig
+```
+
+To verify:
+
+```bash
+# Verify Sigstore signature
+[...]$ model_signing verify sigstore quay.io/user/model:latest \
   --identity user@example.com \
-  --identity_provider https://accounts.google.com
+  --identity-provider https://accounts.google.com
+
+# Verify key-based signature
+[...]$ model_signing verify key quay.io/user/model:latest --public-key key.pub
 ```
 
-2. **Against local model files** (automatically detects OCI layer signatures):
+You can also verify that local files match a signed image:
+
 ```bash
-[...]$ model_signing verify model_dir \
-  --signature model.sig \
+[...]$ model_signing verify sigstore quay.io/user/model:latest \
   --identity user@example.com \
-  --identity_provider https://accounts.google.com
+  --identity-provider https://accounts.google.com \
+  --local-model ./downloaded-model
 ```
 
-The tool automatically detects OCI manifest signatures and matches files by path using `org.opencontainers.image.title` annotations (ORAS-style). For multi-layer images, verification against local files attempts to match individual files by path.
+The tool auto-detects the target type: if the path exists locally, it is treated
+as a file; otherwise, it is treated as an OCI image reference.
 
-**Python API:**
+##### Python API
 
 ```python
-import json
-from model_signing import hashing, signing, verifying
+import model_signing
 
-# Sign from OCI manifest
-with open("manifest.json") as f:
-    oci_data = json.load(f)
-
-manifest = hashing.create_manifest_from_oci_layers(oci_data)
-signing.Config().use_sigstore_signer().sign_from_manifest(
-    manifest, "model.sig"
+# Sign an image
+model_signing.signing.Config().use_sigstore_signer().sign_image(
+    "quay.io/user/model:latest"
 )
 
-# Verify from OCI manifest
-verifying.Config().use_sigstore_verifier(
+# Verify an image
+model_signing.verifying.Config().use_sigstore_verifier(
     identity="user@example.com",
     oidc_issuer="https://accounts.google.com"
-).verify_from_oci_manifest(oci_data, "model.sig")
+).verify_image("quay.io/user/model:latest")
 
-# Or verify from local files (automatically handles OCI signatures)
-verifying.Config().use_sigstore_verifier(
+# Verify image and check local files match
+model_signing.verifying.Config().use_sigstore_verifier(
     identity="user@example.com",
     oidc_issuer="https://accounts.google.com"
-).verify("model_dir", "model.sig")
+).verify_image("quay.io/user/model:latest", local_model_path="./model_dir")
 ```
 
 #### Signing with PKCS #11 URIs
@@ -451,7 +469,7 @@ The same verification configuration can be used to verify multiple models:
 ```python
 import model_signing
 
-verifying_config = model_signing.signing.Config().use_elliptic_key_verifier(
+verifying_config = model_signing.verifying.Config().use_elliptic_key_verifier(
     public_key="key.pub"
 )
 
