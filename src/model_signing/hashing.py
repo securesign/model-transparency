@@ -51,7 +51,7 @@ from collections.abc import Callable, Iterable
 import os
 import pathlib
 import sys
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import blake3
 
@@ -67,6 +67,10 @@ if sys.version_info >= (3, 11):
     from typing import Self
 else:
     from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from model_signing._oci.manifest_parser import BlobPuller
+    from model_signing._oci.registry import ImageReference
 
 
 # `TypeAlias` only exists from Python 3.10
@@ -127,84 +131,58 @@ def create_manifest_from_oci_layers(
     oci_manifest: dict,
     model_name: str | None = None,
     include_config: bool = True,
+    oci_client: "BlobPuller | None" = None,
+    image_ref: "ImageReference | None" = None,
+    model_path_prefix: str = "/models/",
 ) -> manifest.Manifest:
-    """Create a manifest from an OCI image manifest.
+    """Convert an OCI image manifest into a model signing manifest.
 
-    This function extracts layer digests from an OCI image manifest (as returned
-    by `skopeo inspect --raw`) and creates a model signing manifest. Each layer
-    is treated as a file entry in the manifest.
+    This function takes an OCI image manifest (the registry artifact descriptor
+    containing layer references) and converts it into a model signing manifest
+    (our internal representation of file paths and their digests).
+
+    Supports multiple OCI formats:
+    - OCI artifacts (ORAS-style): Uses layer digests and title annotations.
+    - ModelCar format: Uses content digest annotations for original file hashes.
+
+    The resulting manifest is interoperable - the same model produces identical
+    manifests regardless of whether it's stored as an OCI artifact, ModelCar
+    image, or local files.
 
     Args:
         oci_manifest: The OCI image manifest as a dictionary (from JSON).
-          Expected to have "layers" array with "digest" fields, and optionally
-          a "config" field with a "digest".
+          This is the artifact manifest from the registry containing layer
+          descriptors with digests. Expected to have "layers" array with
+          "digest" fields, and optionally a "config" field.
         model_name: Optional name for the model. If not provided, will attempt
           to extract from annotations or use "oci-image".
         include_config: Whether to include the config blob digest as a file
-          entry. Default is True.
+          entry. Default is True. Only applies to OCI artifacts.
+        oci_client: OCI registry client. Required for ModelCar directory layers
+          which need to be pulled and decompressed to hash individual files.
+        image_ref: Image reference for pulling blobs. Required for ModelCar
+          directory layers.
+        model_path_prefix: Prefix to strip from ModelCar layer paths.
+          Default is "/models/".
 
     Returns:
-        A Manifest object ready for signing.
+        A model signing Manifest containing file paths mapped to their
+        SHA256 digests, ready for signing or comparison.
 
     Raises:
-        ValueError: If the OCI manifest structure is invalid or missing required
-          fields.
+        ValueError: If the OCI image manifest structure is invalid or missing
+          required fields.
     """
-    if "layers" not in oci_manifest:
-        raise ValueError("OCI manifest missing 'layers' field")
+    from model_signing._oci.manifest_parser import parse_oci_manifest
 
-    manifest_items = []
-
-    if include_config and "config" in oci_manifest:
-        config = oci_manifest["config"]
-        if "digest" in config:
-            config_digest = parse_digest_string(config["digest"])
-            config_path = pathlib.PurePosixPath("config.json")
-            manifest_items.append(
-                manifest.FileManifestItem(
-                    path=config_path, digest=config_digest
-                )
-            )
-
-    for i, layer in enumerate(oci_manifest["layers"]):
-        if "digest" not in layer:
-            continue
-
-        layer_digest = parse_digest_string(layer["digest"])
-
-        # Try to extract file path from annotations (ORAS-style)
-        # This is easier for verification as we can match by file path
-        layer_path = None
-        if "annotations" in layer:
-            annotations = layer["annotations"]
-            if "org.opencontainers.image.title" in annotations:
-                title = annotations["org.opencontainers.image.title"]
-                layer_path = pathlib.PurePosixPath(title)
-
-        if layer_path is None:
-            layer_path = pathlib.PurePosixPath(f"layer_{i:03d}.tar.gz")
-
-        manifest_items.append(
-            manifest.FileManifestItem(path=layer_path, digest=layer_digest)
-        )
-
-    if not manifest_items:
-        raise ValueError("No digests found in OCI manifest")
-
-    if model_name is None:
-        annotations = oci_manifest.get("annotations", {})
-        if "org.opencontainers.image.name" in annotations:
-            model_name = annotations["org.opencontainers.image.name"]
-        elif "org.opencontainers.image.base.name" in annotations:
-            model_name = annotations["org.opencontainers.image.base.name"]
-        else:
-            model_name = "oci-image"
-
-    serialization_type = manifest._FileSerialization(
-        hash_type="sha256", allow_symlinks=False, ignore_paths=frozenset()
+    return parse_oci_manifest(
+        oci_manifest,
+        model_name=model_name,
+        include_config=include_config,
+        oci_client=oci_client,
+        image_ref=image_ref,
+        model_path_prefix=model_path_prefix,
     )
-
-    return manifest.Manifest(model_name, manifest_items, serialization_type)
 
 
 class Config:
