@@ -1,26 +1,35 @@
 # Changelog
 
-All notable changes to `model-signing` will be documented in this file.
+All notable changes to `rh-model-signing` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-All versions prior to 1.0.0 are untracked.
-
 ## [Unreleased]
 
+## [0.0.3] - 2026-01-12
+
+Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](https://github.com/sigstore/model-transparency) v1.1.1.
+
 ### Added
-- Added support for signing and verifying OCI model manifests directly without requiring model files on disk. Now, we can detect OCI manifest JSON files and sign from them or verify against them. When verifying local files against signatures created from OCI manifests, the tool automatically matches files by path using `org.opencontainers.image.title` annotations (ORAS-style), enabling cross-verification between OCI images and local model directories.
+- Added support for signing and verifying OCI model manifests directly without requiring model files on disk. OCI manifest JSON files can be detected and signed, or verified against. When verifying local files against signatures created from OCI manifests, the tool automatically matches files by path using `org.opencontainers.image.title` annotations (ORAS-style), enabling cross-verification between OCI images and local model directories.
+- Package renamed to `rh-model-signing` for Red Hat distribution.
+- Added `rh_model_signing` CLI entry point (in addition to `model_signing`).
 
 ### Changed
-- ...
+- Rebased on upstream v1.1.1 with all upstream features including:
+  - Support for signing with PKCS #11 devices
+  - Support for signing and verifying using private Sigstore instances (`--trust_config`)
+  - Support for `--oauth_force_oob`, `--client_id`, `--client_secret` options
+  - Support for `--allow_symlinks` and `--ignore_unsigned_files` options
+  - OpenTelemetry tracing support
+  - BLAKE3 hashing support
+- Removed Python 3.9 support (EOL 2025-10-31)
+- Added Python 3.14 support
 
 ### Fixed
-- Fixed a bug where ignored symlinks could raise `ValueError`s if allow_symlinks was unset, even though they were skipped during serialization. ([#550](https://github.com/sigstore/model-transparency/pull/550))
-- Fixed a bug where any PEM encoded key could be read during the key-based flows which resulted in a Python exception because the rest of the code only supported elliptic curve keys. ([#573](https://github.com/sigstore/model-transparency/pull/573))
-
-### Removed
-- Removed Python 3.9 support due to it reaching EOL 2025-10-31 (https://devguide.python.org/versions/)
+- Fixed a bug where ignored symlinks could raise `ValueError`s if allow_symlinks was unset
+- Fixed a bug where any PEM encoded key could be read during key-based flows
 
 ## [1.1.1] - 2025-10-10
 
@@ -83,7 +92,10 @@ All versions prior to 1.0.0 are untracked.
 - [Demo notebook](https://colab.sandbox.google.com/drive/18IB_uipduXYq0ohMxJv2xHfeihLIcGMT) to showcase API and CLI examples.
 
 
-[Unreleased]: https://github.com/sigstore/model-transparency/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/securesign/model-transparency/releases/tag/v0.0.3
+
+<!-- Upstream changelog references -->
 [1.1.1]: https://github.com/sigstore/model-transparency/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/sigstore/model-transparency/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/sigstore/model-transparency/compare/v1.0.0...v1.0.1

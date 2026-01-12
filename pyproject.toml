@@ -3,14 +3,20 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "model-signing"
+name = "rh-model-signing"
 dynamic = ["version"]
-description = "A tool for signing and verifying ML models"
+description = "A tool for signing and verifying ML models (Red Hat Tech Preview)"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [
   { name = "Sigstore Authors", email = "sigstore-dev@googlegroups.com" }
+]
+maintainers = [
+  { name = "Aleksy Siek", email = "asiek@redhat.com" },
+  { name = "Kevin Conner", email = "kconner@redhat.com" },
+  { name = "Nina Bongartz", email = "nolear@redhat.com" },
+  { name = "Sachin Sampras", email = "sacm@redhat.com" },
 ]
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
@@ -20,7 +26,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "Topic :: Security",
   "Topic :: Security :: Cryptography",
@@ -63,14 +69,15 @@ otel = [
 
 [project.scripts]
 model_signing = "model_signing._cli:main"
+rh_model_signing = "model_signing._cli:main"
 
 [project.urls]
-Homepage = "https://pypi.org/project/model-signing/"
-Changelog = "https://github.com/sigstore/model-transparency/blob/main/CHANGELOG.md"
-Documentation = "https://sigstore.github.io/model-transparency/model_signing.html"
-Source = "https://github.com/sigstore/model-transparency"
-Issues = "https://github.com/sigstore/model-transparency/issues"
-PyPI = "https://pypi.org/project/model-signing/"
+Homepage = "https://pypi.org/project/rh-model-signing/"
+Changelog = "https://github.com/securesign/model-transparency/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/securesign/model-transparency"
+Source = "https://github.com/securesign/model-transparency"
+Issues = "https://github.com/securesign/model-transparency/issues"
+PyPI = "https://pypi.org/project/rh-model-signing/"
 
 [tool.hatch.version]
 path = "src/model_signing/__init__.py"
@@ -124,7 +131,7 @@ extra-dependencies = [
 ]
 
 [tool.hatch.envs.docs.scripts]
-serve = "pdoc model_signing --docformat google --edit-url model_signing=https://github.com/sigstore/model-transparency/blob/main/src/model_signing/ {args}"
+serve = "pdoc model_signing --docformat google --edit-url model_signing=https://github.com/securesign/model-transparency/blob/main/src/model_signing/ {args}"
 build = "serve --output-directory html"
 
 [tool.hatch.envs.type]
