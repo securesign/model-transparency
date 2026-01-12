@@ -116,7 +116,7 @@ case is a custom predicate that identifies all the components of the model.
 Read more [on the repository's `README.md`][repo]. The CLI that maps over the
 API is also documented there.
 
-[repo]: https://github.com/sigstore/model-transparency/blob/main/README.md
+[repo]: https://github.com/securesign/model-transparency/blob/main/README.md
 """
 
 from model_signing import hashing
@@ -125,7 +125,7 @@ from model_signing import signing
 from model_signing import verifying
 
 
-__version__ = "1.1.1"
+__version__ = "0.0.3"
 
 
 __all__ = ["hashing", "signing", "verifying", "manifest"]
