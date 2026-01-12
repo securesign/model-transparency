@@ -14,25 +14,26 @@
 
 """Signers and verifiers using elliptic curve keys."""
 
+import base64
 import hashlib
 import pathlib
-from typing import Optional
 
 from cryptography import exceptions
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import types as crypto_types
 from google.protobuf import json_format
-from sigstore_protobuf_specs.dev.sigstore.bundle import v1 as bundle_pb
-from sigstore_protobuf_specs.dev.sigstore.common import v1 as common_pb
-from sigstore_protobuf_specs.io import intoto as intoto_pb
+from sigstore_models import intoto as intoto_pb
+from sigstore_models.bundle import v1 as bundle_pb
+from sigstore_models.common import v1 as common_pb
 from typing_extensions import override
 
 from model_signing._signing import sign_sigstore_pb as sigstore_pb
 from model_signing._signing import signing
 
 
-def _check_supported_ec_key(public_key: ec.EllipticCurvePublicKey):
+def _check_supported_ec_key(public_key: crypto_types.PublicKeyTypes):
     """Checks if the elliptic curve key is supported by our package.
 
     We only support a family of curves, trying to match those specified by
@@ -43,8 +44,11 @@ def _check_supported_ec_key(public_key: ec.EllipticCurvePublicKey):
         public_key: The public key to check. Can be obtained from a private key.
 
     Raises:
-        ValueError: The key is not supported.
+        ValueError: The key is not supported, or is not an elliptic curve one.
     """
+    if not isinstance(public_key, ec.EllipticCurvePublicKey):
+        raise ValueError("Only elliptic curve keys are supported")
+
     curve = public_key.curve.name
     if curve not in ["secp256r1", "secp384r1", "secp521r1"]:
         raise ValueError(f"Unsupported key for curve '{curve}'")
@@ -67,22 +71,22 @@ def get_ec_key_hash(
     """
     key_size = public_key.curve.key_size
 
-    # TODO: Once Python 3.9 support is deprecated revert to using `match`
-    if key_size == 256:
-        return hashes.SHA256()
-    if key_size == 384:
-        return hashes.SHA384()
-    if key_size == 521:
-        return hashes.SHA512()
-
-    raise ValueError(f"Unexpected key size {key_size}")
+    match key_size:
+        case 256:
+            return hashes.SHA256()
+        case 384:
+            return hashes.SHA384()
+        case 521:
+            return hashes.SHA512()
+        case _:
+            raise ValueError(f"Unexpected key size {key_size}")
 
 
 class Signer(sigstore_pb.Signer):
     """Signer using an elliptic curve private key."""
 
     def __init__(
-        self, private_key_path: pathlib.Path, password: Optional[str] = None
+        self, private_key_path: pathlib.Path, password: str | None = None
     ):
         """Initializes the signer with the private key and optional password.
 
@@ -102,15 +106,17 @@ class Signer(sigstore_pb.Signer):
         )
 
         raw_signature = intoto_pb.Signature(
-            sig=self._private_key.sign(
-                sigstore_pb.pae(raw_payload),
-                ec.ECDSA(get_ec_key_hash(self._private_key.public_key())),
+            sig=base64.b64encode(
+                self._private_key.sign(
+                    sigstore_pb.pae(raw_payload),
+                    ec.ECDSA(get_ec_key_hash(self._private_key.public_key())),
+                )
             ),
             keyid="",
         )
 
         envelope = intoto_pb.Envelope(
-            payload=raw_payload,
+            payload=base64.b64encode(raw_payload),
             payload_type=signing._IN_TOTO_JSON_PAYLOAD_TYPE,
             signatures=[raw_signature],
         )
@@ -135,7 +141,8 @@ class Signer(sigstore_pb.Signer):
         hash_bytes = hashlib.sha256(raw_bytes).digest().hex()
 
         return bundle_pb.VerificationMaterial(
-            public_key=common_pb.PublicKeyIdentifier(hint=hash_bytes)
+            public_key=common_pb.PublicKeyIdentifier(hint=hash_bytes),
+            tlog_entries=[],
         )
 
 

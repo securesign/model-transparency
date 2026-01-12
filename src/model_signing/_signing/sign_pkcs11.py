@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 from collections.abc import Iterable
 import hashlib
 import pathlib
-from typing import Optional
 
 from asn1crypto.algos import DSASignature
 from asn1crypto.core import OctetString
@@ -27,9 +27,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from google.protobuf import json_format
 import PyKCS11
-from sigstore_protobuf_specs.dev.sigstore.bundle import v1 as bundle_pb
-from sigstore_protobuf_specs.dev.sigstore.common import v1 as common_pb
-from sigstore_protobuf_specs.io import intoto as intoto_pb
+from sigstore_models import intoto as intoto_pb
+from sigstore_models.bundle import v1 as bundle_pb
+from sigstore_models.common import v1 as common_pb
 from typing_extensions import override
 
 from model_signing._signing import sign_ec_key as ec_key
@@ -123,7 +123,7 @@ class Signer(sigstore_pb.Signer):
         return self._public_key
 
     def find_object(
-        self, clas: int, label: Optional[str], id: Optional[bytes]
+        self, clas: int, label: str | None, id: bytes | None
     ) -> PyKCS11.CK_OBJECT_HANDLE:
         """Find an object given its class and optional label and id."""
         if label is None and id is None:
@@ -136,7 +136,7 @@ class Signer(sigstore_pb.Signer):
         if label is not None:
             msg = f"label {label}"
         if id is not None:
-            if len(msg):
+            if msg:
                 msg += " and "
             msg += f"id {id}"
 
@@ -175,10 +175,10 @@ class Signer(sigstore_pb.Signer):
         # Convert plain r & s signature values to ASN.1
         sig = DSASignature.from_p1363(rs_sig).dump()
 
-        raw_signature = intoto_pb.Signature(sig=sig, keyid="")
+        raw_signature = intoto_pb.Signature(sig=base64.b64encode(sig), keyid="")
 
         envelope = intoto_pb.Envelope(
-            payload=raw_payload,
+            payload=base64.b64encode(raw_payload),
             payload_type=signing._IN_TOTO_JSON_PAYLOAD_TYPE,
             signatures=[raw_signature],
         )
@@ -203,7 +203,8 @@ class Signer(sigstore_pb.Signer):
         hash_bytes = hashlib.sha256(raw_bytes).digest().hex()
 
         return bundle_pb.VerificationMaterial(
-            public_key=common_pb.PublicKeyIdentifier(hint=hash_bytes)
+            public_key=common_pb.PublicKeyIdentifier(hint=hash_bytes),
+            tlog_entries=[],
         )
 
 

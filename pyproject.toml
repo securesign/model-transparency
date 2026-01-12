@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,19 +7,19 @@ name = "model-signing"
 dynamic = ["version"]
 description = "A tool for signing and verifying ML models"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
   { name = "Sigstore Authors", email = "sigstore-dev@googlegroups.com" }
 ]
 classifiers = [
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Topic :: Security",
@@ -29,13 +29,15 @@ classifiers = [
 ]
 dependencies = [
   "asn1crypto",
+  "blake3",
   "click",
   "cryptography",
   "in-toto-attestation",
-  "sigstore @ git+https://github.com/securesign/sigstore-python.git@1.3",
+  "sigstore>=4.0",
+  "sigstore-models>=0.0.5",
   "typing_extensions",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = [
   "machine learning",
   "artificial intelligence",
@@ -89,7 +91,7 @@ features = [
 ]
 
 [[tool.hatch.envs.hatch-test.matrix]]
-python = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+python = ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
 [tool.hatch.envs.bench]
 description = """Custom environment for running benchmarks.
@@ -100,10 +102,12 @@ Use `hatch run +py=3... bench:chunk ${args}` to benchmark the chunk size paramet
 """
 extra-dependencies = [
   "numpy",
+  "psutil",
+  "py-cpuinfo",
 ]
 
 [[tool.hatch.envs.bench.matrix]]
-python = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+python = ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
 [tool.hatch.envs.bench.scripts]
 generate = "python benchmarks/generate.py {args}"
@@ -128,6 +132,7 @@ description = """Custom environment for pytype.
 Use `hatch run type:check` to check types.
 """
 extra-dependencies = [
+  "py-cpuinfo",
   "pytest",
   "pytype",
 ]
@@ -159,6 +164,9 @@ pythonpath = "src"
 
 [tool.ruff]
 line-length = 80
+exclude = [
+    "docs/demo.ipynb",
+]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -171,7 +179,8 @@ ignore = [
   # TODO: selectively enable back most of these in subsequent PRs
   "B024", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D417",
   # Unnecessary arguments can help with clarity
-  "UP012", "UP015"
+  "UP012", "UP015",
+  "PLC0415", # Lazy imports
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
@@ -185,6 +194,9 @@ force-single-line = true
 force-sort-within-sections = true
 lines-after-imports = 2
 single-line-exclusions = ["collections.abc", "typing"]
+
+[tool.ruff.lint.pep8-naming]
+ignore-names = ["TestOneInput"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

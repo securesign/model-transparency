@@ -19,7 +19,6 @@ import concurrent.futures
 import itertools
 import os
 import pathlib
-from typing import Optional
 
 from typing_extensions import override
 
@@ -39,7 +38,7 @@ class Serializer(serialization.Serializer):
         self,
         file_hasher_factory: Callable[[pathlib.Path], io.FileHasher],
         *,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
         allow_symlinks: bool = False,
         ignore_paths: Iterable[pathlib.Path] = frozenset(),
     ):
@@ -53,6 +52,7 @@ class Serializer(serialization.Serializer):
             allow_symlinks: Controls whether symbolic links are included. If a
               symlink is present but the flag is `False` (default) the
               serialization would raise an error.
+            ignore_paths: The paths of files to ignore.
         """
         self._hasher_factory = file_hasher_factory
         self._max_workers = max_workers
@@ -65,10 +65,15 @@ class Serializer(serialization.Serializer):
         self._serialization_description = manifest._FileSerialization(
             hasher.digest_name, self._allow_symlinks, self._ignore_paths
         )
+        self._is_blake3 = hasher.digest_name == "blake3"
 
     def set_allow_symlinks(self, allow_symlinks: bool) -> None:
         """Set whether following symlinks is allowed."""
         self._allow_symlinks = allow_symlinks
+        hasher = self._hasher_factory(pathlib.Path())
+        self._serialization_description = manifest._FileSerialization(
+            hasher.digest_name, self._allow_symlinks, self._ignore_paths
+        )
 
     @override
     def serialize(
@@ -76,7 +81,7 @@ class Serializer(serialization.Serializer):
         model_path: pathlib.Path,
         *,
         ignore_paths: Iterable[pathlib.Path] = frozenset(),
-        files_to_hash: Optional[Iterable[pathlib.Path]] = None,
+        files_to_hash: Iterable[pathlib.Path] | None = None,
     ) -> manifest.Manifest:
         """Serializes the model given by the `model_path` argument.
 
@@ -105,17 +110,18 @@ class Serializer(serialization.Serializer):
                 (model_path,), model_path.glob("**/*")
             )
         for path in files_to_hash:
+            if serialization.should_ignore(path, ignore_paths):
+                continue
             serialization.check_file_or_directory(
                 path, allow_symlinks=self._allow_symlinks
             )
-            if path.is_file() and not serialization.should_ignore(
-                path, ignore_paths
-            ):
+            if path.is_file():
                 paths.append(path)
 
         manifest_items = []
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._max_workers
+            # blake3 parallelizes internally
+            max_workers=1 if self._is_blake3 else self._max_workers
         ) as tpe:
             futures = [
                 tpe.submit(self._compute_hash, model_path, path)

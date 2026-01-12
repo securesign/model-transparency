@@ -16,7 +16,7 @@
 
 import pathlib
 import sys
-from typing import Optional, cast
+from typing import cast
 
 from google.protobuf import json_format
 from sigstore import dsse as sigstore_dsse
@@ -24,7 +24,6 @@ from sigstore import models as sigstore_models
 from sigstore import oidc as sigstore_oidc
 from sigstore import sign as sigstore_signer
 from sigstore import verify as sigstore_verifier
-from sigstore._internal.trust import ClientTrustConfig
 from typing_extensions import override
 
 from model_signing._signing import signing
@@ -52,12 +51,12 @@ class Signature(signing.Signature):
 
     @override
     def write(self, path: pathlib.Path) -> None:
-        path.write_text(self.bundle.to_json())
+        path.write_text(self.bundle.to_json(), encoding="utf-8")
 
     @classmethod
     @override
     def read(cls, path: pathlib.Path) -> Self:
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         return cls(sigstore_models.Bundle.from_json(content))
 
 
@@ -67,14 +66,14 @@ class Signer(signing.Signer):
     def __init__(
         self,
         *,
-        oidc_issuer: Optional[str] = None,
+        oidc_issuer: str | None = None,
         use_ambient_credentials: bool = True,
         use_staging: bool = False,
-        identity_token: Optional[str] = None,
+        identity_token: str | None = None,
         force_oob: bool = False,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        trust_config: Optional[pathlib.Path] = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        trust_config: pathlib.Path | None = None,
     ):
         """Initializes Sigstore signers.
 
@@ -118,23 +117,21 @@ class Signer(signing.Signer):
         # Initializes the signing and issuer contexts based on provided
         # configuration.
         if use_staging:
-            self._signing_context = sigstore_signer.SigningContext.staging()
-            self._issuer = sigstore_oidc.Issuer.staging()
+            trust_config = sigstore_models.ClientTrustConfig.staging()
         elif trust_config:
-            trust_config = ClientTrustConfig.from_json(trust_config.read_text())
-            self._signing_context = (
-                sigstore_signer.SigningContext._from_trust_config(trust_config)
-            )
-            self._issuer = sigstore_oidc.Issuer(
-                trust_config._inner.signing_config.oidc_url
+            trust_config = sigstore_models.ClientTrustConfig.from_json(
+                trust_config.read_text()
             )
         else:
-            self._signing_context = sigstore_signer.SigningContext.production()
-            if oidc_issuer is not None:
-                self._issuer = sigstore_oidc.Issuer(oidc_issuer)
-            else:
-                self._issuer = sigstore_oidc.Issuer.production()
+            trust_config = sigstore_models.ClientTrustConfig.production()
 
+        if not oidc_issuer:
+            oidc_issuer = trust_config.signing_config.get_oidc_url()
+
+        self._issuer = sigstore_oidc.Issuer(oidc_issuer)
+        self._signing_context = (
+            sigstore_signer.SigningContext.from_trust_config(trust_config)
+        )
         self._use_ambient_credentials = use_ambient_credentials
         self._identity_token = identity_token
         self._force_oob = force_oob
@@ -190,7 +187,7 @@ class Verifier(signing.Verifier):
         identity: str,
         oidc_issuer: str,
         use_staging: bool = False,
-        trust_config: Optional[pathlib.Path] = None,
+        trust_config: pathlib.Path | None = None,
     ):
         """Initializes Sigstore verifiers.
 
@@ -210,15 +207,18 @@ class Verifier(signing.Verifier):
               setup. If not specified, the default Sigstore configuration
               is used.
         """
-        if use_staging:
-            self._verifier = sigstore_verifier.Verifier.staging()
-        elif trust_config:
-            trust_config = ClientTrustConfig.from_json(trust_config.read_text())
-            self._verifier = sigstore_verifier.Verifier._from_trust_config(
-                trust_config
+        if trust_config:
+            trust_config = sigstore_models.ClientTrustConfig.from_json(
+                trust_config.read_text()
             )
+        elif use_staging:
+            trust_config = sigstore_models.ClientTrustConfig.staging()
         else:
-            self._verifier = sigstore_verifier.Verifier.production()
+            trust_config = sigstore_models.ClientTrustConfig.production()
+
+        self._verifier = sigstore_verifier.Verifier(
+            trusted_root=trust_config.trusted_root
+        )
 
         self._policy = sigstore_verifier.policy.Identity(
             identity=identity, issuer=oidc_issuer
