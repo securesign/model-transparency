@@ -15,7 +15,9 @@
 # Default
 ARG BUILD_TYPE=minimal
 
-FROM python:3.13-slim AS base_builder
+FROM python:3.13-slim AS base
+
+FROM base AS base_builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -24,19 +26,25 @@ RUN apt-get update && \
 
 FROM base_builder AS minimal_install
 WORKDIR /app
-COPY . /app
+COPY src /app/src
+COPY pyproject.toml /app/
+COPY README.md /app/
+COPY LICENSE /app/
 RUN pip install .
 
 FROM base_builder AS full_install
 WORKDIR /app
-COPY . /app
+COPY src /app/src
+COPY pyproject.toml /app/
+COPY README.md /app/
+COPY LICENSE /app/
 RUN pip install .[pkcs11,otel]
 
-FROM python:3.13-slim AS minimal_image
+FROM base AS minimal_image
 COPY --from=minimal_install /usr/local/bin /usr/local/bin
 COPY --from=minimal_install /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 
-FROM python:3.13-slim AS full_image
+FROM base AS full_image
 COPY --from=full_install /usr/local/bin /usr/local/bin
 COPY --from=full_install /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 
@@ -45,7 +53,7 @@ FROM ${BUILD_TYPE}_image AS final_image
 ENTRYPOINT ["model_signing"]
 CMD ["--help"]
 
-ARG APP_VERSION="1.0.1"
+ARG APP_VERSION="1.1.1"
 
 LABEL org.opencontainers.image.title="Model Transparency Library" \
       org.opencontainers.image.description="Supply chain security for ML" \

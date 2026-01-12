@@ -19,7 +19,6 @@ import concurrent.futures
 import itertools
 import os
 import pathlib
-from typing import Optional
 
 from typing_extensions import override
 
@@ -51,7 +50,7 @@ def _endpoints(step: int, end: int) -> Iterable[int]:
 
 
 class Serializer(serialization.Serializer):
-    """Model serializers that produces a manifest recording every file shard.
+    """Model serializer that produces a manifest recording every file shard.
 
     Traverses the model directory and creates digests for every file found,
     sharding the file in equal shards and computing the digests in parallel.
@@ -63,7 +62,7 @@ class Serializer(serialization.Serializer):
             [pathlib.Path, int, int], io.ShardedFileHasher
         ],
         *,
-        max_workers: Optional[int] = None,
+        max_workers: int | None = None,
         allow_symlinks: bool = False,
         ignore_paths: Iterable[pathlib.Path] = frozenset(),
     ):
@@ -103,6 +102,13 @@ class Serializer(serialization.Serializer):
     def set_allow_symlinks(self, allow_symlinks: bool) -> None:
         """Set whether following symlinks is allowed."""
         self._allow_symlinks = allow_symlinks
+        hasher = self._hasher_factory(pathlib.Path(), 0, 1)
+        self._serialization_description = manifest._ShardSerialization(
+            hasher._content_hasher.digest_name,
+            self._shard_size,
+            self._allow_symlinks,
+            self._ignore_paths,
+        )
 
     @override
     def serialize(
@@ -110,7 +116,7 @@ class Serializer(serialization.Serializer):
         model_path: pathlib.Path,
         *,
         ignore_paths: Iterable[pathlib.Path] = frozenset(),
-        files_to_hash: Optional[Iterable[pathlib.Path]] = None,
+        files_to_hash: Iterable[pathlib.Path] | None = None,
     ) -> manifest.Manifest:
         """Serializes the model given by the `model_path` argument.
 
@@ -119,8 +125,7 @@ class Serializer(serialization.Serializer):
             ignore_paths: The paths to ignore during serialization. If a
               provided path is a directory, all children of the directory are
               ignored.
-            files_to_hash: Opitonal list of files that are to be hashed;
-              ignore all others
+            files_to_hash: Optional list of files to hash; ignore all others
 
         Returns:
             The model's serialized manifest.
@@ -139,12 +144,12 @@ class Serializer(serialization.Serializer):
                 (model_path,), model_path.glob("**/*")
             )
         for path in files_to_hash:
+            if serialization.should_ignore(path, ignore_paths):
+                continue
             serialization.check_file_or_directory(
                 path, allow_symlinks=self._allow_symlinks
             )
-            if path.is_file() and not serialization.should_ignore(
-                path, ignore_paths
-            ):
+            if path.is_file():
                 shards.extend(self._get_shards(path))
 
         manifest_items = []

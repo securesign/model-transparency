@@ -302,6 +302,12 @@ class TestSerializer:
         ):
             _ = serializer.serialize(symlink_model_folder)
 
+    def test_set_allow_symlinks_updates_manifest(self, sample_model_file):
+        serializer = file.Serializer(self._hasher_factory)
+        serializer.set_allow_symlinks(True)
+        manifest = serializer.serialize(sample_model_file)
+        assert manifest.serialization_type["allow_symlinks"] is True
+
     def test_ignore_list_respects_directories(self, sample_model_folder):
         serializer = file.Serializer(self._hasher_factory)
         manifest1 = serializer.serialize(sample_model_folder)
@@ -313,6 +319,12 @@ class TestSerializer:
         assert manifest1 != manifest2
         diff = len(manifest1._item_to_digest) - len(manifest2._item_to_digest)
         assert diff == ignored_file_count
+
+    def test_ignored_symlinks_dont_raise_error(self, symlink_model_folder):
+        serializer = file.Serializer(self._hasher_factory)
+        _ = serializer.serialize(
+            symlink_model_folder, ignore_paths=[symlink_model_folder]
+        )
 
 
 class TestUtilities:

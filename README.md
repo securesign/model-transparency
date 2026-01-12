@@ -9,7 +9,6 @@
   - [Model Signing CLI](#model-signing-cli)
   - [Model Signing API](#model-signing-api)
   - [Model Signing Format](#model-signing-format)
-- [SLSA for ML](#slsa-for-ml)
 - [Status](#status)
 - [Contributing](#contributing)
 
@@ -141,7 +140,7 @@ The `client_trust_config.json` file should include:
 - A `signingConfig` section with your private Rekor, Fulcio, and CT log endpoints
 - Public keys for verification (if applicable)
 
-You can find an example `client_trust_config.json` [here](https://github.com/sigstore/sigstore-python/blob/main/test/assets/trust_config/config.v1.json).
+You can find an example `client_trust_config.json` that references the public Sigstore production services in the Sigstore Python repository [here](https://github.com/sigstore/sigstore-python/blob/main/test/assets/trust_config/config.v1.json).
 
 As another example, here is how we can sign with private keys. First, we
 generate the key pair:
@@ -396,20 +395,8 @@ for more details.
 For a diagram showing the model signing format as well as an explanation of the
 layers, see the [model signing format](docs/model_signing_format.md) document.
 
-## SLSA for ML
-
-This is a separate project from the `model_signing` package, aimed at generating
-[SLSA][slsa] provenance for ML models, using either Github Actions or Google
-Cloud Platform.
-
-See [slsa_for_models/README.md](slsa_for_models/README.md) for more information.
-
 ## Contributing
 
 Please see the [Contributor Guide](CONTRIBUTING.md) for more information.
 
-[slsa]: https://slsa.dev/
-[saif]: https://blog.google/technology/safety-security/introducing-googles-secure-ai-framework/
 [openssf]: https://openssf.org/
-[slsa-generator]: https://github.com/slsa-framework/slsa-github-generator
-[solarwinds]: https://www.techtarget.com/whatis/feature/SolarWinds-hack-explained-Everything-you-need-to-know

@@ -367,6 +367,12 @@ class TestSerializer:
         ):
             _ = serializer.serialize(symlink_model_folder)
 
+    def test_set_allow_symlinks_updates_manifest(self, sample_model_file):
+        serializer = file_shard.Serializer(self._hasher_factory)
+        serializer.set_allow_symlinks(True)
+        manifest_file = serializer.serialize(sample_model_file)
+        assert manifest_file.serialization_type["allow_symlinks"] is True
+
     def test_shard_to_string(self):
         """Ensure the shard's `__str__` method behaves as assumed."""
         shard = manifest._Shard(pathlib.PurePosixPath("a"), 0, 42)
@@ -381,3 +387,9 @@ class TestSerializer:
         )
         assert manifest1 != manifest2
         assert len(manifest1._item_to_digest) > len(manifest2._item_to_digest)
+
+    def test_ignored_symlinks_dont_raise_error(self, symlink_model_folder):
+        serializer = file_shard.Serializer(self._hasher_factory)
+        _ = serializer.serialize(
+            symlink_model_folder, ignore_paths=[symlink_model_folder]
+        )
