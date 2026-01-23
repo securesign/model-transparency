@@ -116,12 +116,21 @@ This will open an OIDC flow to obtain a short lived token for the certificate.
 The identity used during signing and the provider must be reused during
 verification.
 
-## Using Private Sigstore Instances
-
-To use a private Sigstore setup (e.g. custom Rekor/Fulcio), use the `--trust_config` flag:
+To only compute and output the digest of the model, you can use the `digest`
+subcommand, pointing it to the model directory:
 
 ```bash
-[...]$ model_signing sign bert-base-uncased --trust_config client_trust_config.json
+[...]$ model_signing digest bert-base-uncased
+```
+
+The digest subcommand follows the same ignore rules used when signing.
+
+## Using Private Sigstore Instances
+
+To use a private Sigstore setup (e.g. custom Rekor/Fulcio), use the `--trust-config` flag:
+
+```bash
+[...]$ model_signing sign bert-base-uncased --trust-config client_trust_config.json
 ```
 
 For verification:
@@ -129,9 +138,9 @@ For verification:
 ```bash
 [...]$ model_signing verify bert-base-uncased \
       --signature model.sig \
-      --trust_config client_trust_config.json
+      --trust-config client_trust_config.json
       --identity "$identity"
-      --identity_provider "$oidc_provider"
+      --identity-provider "$oidc_provider"
 ```
 
 The `client_trust_config.json` file should include:
@@ -153,7 +162,7 @@ generate the key pair:
 And then we use the private key to sign.
 
 ```bash
-[...]$ model_signing sign key bert-base-uncased --private_key key.priv
+[...]$ model_signing sign key bert-base-uncased --private-key key.priv
 ```
 
 All signing methods support changing the signature name and location via the
@@ -173,7 +182,7 @@ model we use
 [...]$ model_signing verify bert-base-uncased \
       --signature model.sig \
       --identity "$identity" \
-      --identity_provider "$oidc_provider"
+      --identity-provider "$oidc_provider"
 ```
 
 Where `$identity` and `$oidc_provider` are those set up during the signing flow
@@ -201,7 +210,7 @@ Similarly, for key verification, we can use
 
 ```bash
 [...]$ model_signing verify key bert-base-uncased \
-       --signature resnet.sig --public_key key.pub
+       --signature resnet.sig --public-key key.pub
 ```
 
 #### Signing and Verifying OCI Images
@@ -307,7 +316,7 @@ the PKCS #11 device and store it in a file in PEM format. With can then use:
 
 ```bash
 [...]$ model_signing verify key --signature model.sig\
-       --public_key key.pub  /path/to/your/model
+       --public-key key.pub  /path/to/your/model
 ```
 
 #### OpenTelemetry Support

@@ -133,7 +133,7 @@ _read_signature_option = click.option(
 
 # Decorator for the commonly used option for the custom trust configuration.
 _trust_config_option = click.option(
-    "--trust_config",
+    "--trust-config",
     type=pathlib.Path,
     metavar="TRUST_CONFIG_PATH",
     help="The client trust configuration to use",
@@ -159,7 +159,7 @@ _ignore_git_paths_option = click.option(
 
 # Decorator for the commonly used option to ignore all unsigned files
 _ignore_unsigned_files_option = click.option(
-    "--ignore_unsigned_files/--no-ignore_unsigned_files",
+    "--ignore-unsigned-files/--no-ignore-unsigned-files",
     type=bool,
     show_default=True,
     help="Ignore all files that were not originally signed.",
@@ -168,7 +168,7 @@ _ignore_unsigned_files_option = click.option(
 # Decorator for the commonly used option to set the path to the private key
 # (when using non-Sigstore PKI).
 _private_key_option = click.option(
-    "--private_key",
+    "--private-key",
     type=pathlib.Path,
     metavar="PRIVATE_KEY",
     required=True,
@@ -177,7 +177,7 @@ _private_key_option = click.option(
 
 # Decorator for the commonly used option to set a PKCS #11 URI
 _pkcs11_uri_option = click.option(
-    "--pkcs11_uri",
+    "--pkcs11-uri",
     type=str,
     metavar="PKCS11_URI",
     required=True,
@@ -187,7 +187,7 @@ _pkcs11_uri_option = click.option(
 # Decorator for the commonly used option to pass a certificate chain to
 # establish root of trust (when signing or verifying using certificates).
 _certificate_root_of_trust_option = click.option(
-    "--certificate_chain",
+    "--certificate-chain",
     type=pathlib.Path,
     metavar="CERTIFICATE_PATH",
     multiple=True,
@@ -197,7 +197,7 @@ _certificate_root_of_trust_option = click.option(
 
 # Decorator for the commonly used option to use Sigstore's staging instance.
 _sigstore_staging_option = click.option(
-    "--use_staging",
+    "--use-staging",
     type=bool,
     is_flag=True,
     help="Use Sigstore's staging instance.",
@@ -205,7 +205,7 @@ _sigstore_staging_option = click.option(
 
 # Decorator for the commonly used option to pass the signing key's certificate
 _signing_certificate_option = click.option(
-    "--signing_certificate",
+    "--signing-certificate",
     type=pathlib.Path,
     metavar="CERTIFICATE_PATH",
     required=True,
@@ -214,7 +214,7 @@ _signing_certificate_option = click.option(
 
 # Decorator for the commonly used option to allow symlinks
 _allow_symlinks_option = click.option(
-    "--allow_symlinks",
+    "--allow-symlinks",
     is_flag=True,
     help="Whether to allow following symlinks when signing or verifying files.",
 )
@@ -314,7 +314,10 @@ class _PKICmdGroup(click.Group):
 
 
 @click.group(
-    context_settings=dict(help_option_names=["-h", "--help"]),
+    context_settings=dict(
+        help_option_names=["-h", "--help"],
+        token_normalize_func=lambda x: x.replace("_", "-"),
+    ),
     epilog=(
         "Check https://sigstore.github.io/model-transparency for "
         "documentation and more details."
@@ -361,6 +364,51 @@ def main(log_level: str) -> None:
         sys.exit(1)
 
 
+@main.command(name="digest")
+@_model_path_argument
+@_ignore_paths_option
+@_ignore_git_paths_option
+@_allow_symlinks_option
+def _digest(
+    model_path: pathlib.Path,
+    ignore_paths: Iterable[pathlib.Path],
+    ignore_git_paths: bool,
+    allow_symlinks: bool,
+) -> None:
+    """Computes the digest of a model.
+
+    The digest subcommand serializes a model directory and computes the "root"
+    digest (hash), the same used when signing and as the attestation subject.
+
+    By default, git-related files are ignored (same behavior as the sign
+    command). Use --no-ignore-git-paths to include them. To ignore other
+    files from the directory serialization, use --ignore-paths.
+    """
+    from model_signing._hashing import memory
+
+    try:
+        # First, generate the manifest of the model directory
+        ignored = _resolve_ignore_paths(model_path, list(ignore_paths))
+        manifest = (
+            model_signing.hashing.Config()
+            .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
+            .set_allow_symlinks(allow_symlinks)
+            .hash(model_path)
+        )
+
+        # Then, hash the resource descriptors as done when signing
+        hasher = memory.SHA256()
+        for descriptor in manifest.resource_descriptors():
+            hasher.update(descriptor.digest.digest_value)
+        root_digest = hasher.compute()
+
+        click.echo(f"{root_digest.algorithm}:{root_digest.digest_hex}")
+
+    except Exception as err:
+        click.echo(f"Computing digest failed: {err}", err=True)
+        sys.exit(1)
+
+
 @main.group(name="sign", subcommand_metavar="PKI_METHOD", cls=_PKICmdGroup)
 def _sign() -> None:
     """Sign models.
@@ -390,13 +438,13 @@ def _sign() -> None:
 @_sigstore_staging_option
 @_trust_config_option
 @click.option(
-    "--use_ambient_credentials",
+    "--use-ambient-credentials",
     type=bool,
     is_flag=True,
     help="Use credentials from ambient environment.",
 )
 @click.option(
-    "--identity_token",
+    "--identity-token",
     type=str,
     metavar="TOKEN",
     help=(
@@ -405,7 +453,7 @@ def _sign() -> None:
     ),
 )
 @click.option(
-    "--oauth_force_oob",
+    "--oauth-force-oob",
     is_flag=True,
     default=False,
     help=(
@@ -414,13 +462,13 @@ def _sign() -> None:
     ),
 )
 @click.option(
-    "--client_id",
+    "--client-id",
     type=str,
     metavar="ID",
     help="The custom OpenID Connect client ID to use during OAuth2",
 )
 @click.option(
-    "--client_secret",
+    "--client-secret",
     type=str,
     metavar="SECRET",
     help="The custom OpenID Connect client secret to use during OAuth2",
@@ -449,20 +497,20 @@ def _sign_sigstore(
     taken from an interactive OIDC flow, but ambient credentials could be used
     to use workload identity tokens (e.g., when running in GitHub actions).
     Alternatively, a constant identity token can be provided via
-    `--identity_token`.
+    `--identity-token`.
 
     Sigstore allows users to use a staging instance for test-only signatures.
-    Passing the `--use_staging` flag would use that instance instead of the
+    Passing the `--use-staging` flag would use that instance instead of the
     production one.
 
     Additionally, you can specify a custom trust configuration JSON file using
-    the `--trust_config` flag. This allows you to fully customize the PKI
+    the `--trust-config` flag. This allows you to fully customize the PKI
     (Private Key Infrastructure) used in the signing process. By providing a
-    `--trust_config`, you can define your own transparency logs, certificate
+    `--trust-config`, you can define your own transparency logs, certificate
     authorities, and other trust settings, enabling full control over the
     trust model, including which PKI to use for signature verification.
 
-    If `--trust_config` is not provided, the default Sigstore instance is
+    If `--trust-config` is not provided, the default Sigstore instance is
     used, which is pre-configured with Sigstore’s own trusted transparency
     logs and certificate authorities. This provides a ready-to-use default
     trust model for most use cases but may not be suitable for custom or
@@ -880,7 +928,7 @@ def _verify() -> None:
     subcommand).
 
     To enable verification with custom PKI configurations, use the
-    `--trust_config` option. This allows you to specify your own set of trusted
+    `--trust-config` option. This allows you to specify your own set of trusted
     public keys, transparency logs, and certificate authorities for verifying
     the signature. If not provided, the default Sigstore instance and its
     associated public keys, logs, and authorities are used.
@@ -905,7 +953,7 @@ def _verify() -> None:
     help="The expected identity of the signer (e.g., name@example.com).",
 )
 @click.option(
-    "--identity_provider",
+    "--identity-provider",
     type=str,
     metavar="IDENTITY_PROVIDER",
     required=True,
@@ -1001,7 +1049,7 @@ def _verify_sigstore(
 @_ignore_git_paths_option
 @_allow_symlinks_option
 @click.option(
-    "--public_key",
+    "--public-key",
     type=pathlib.Path,
     metavar="PUBLIC_KEY",
     required=True,
@@ -1079,7 +1127,7 @@ def _verify_private_key(
 @_allow_symlinks_option
 @_certificate_root_of_trust_option
 @click.option(
-    "--log_fingerprints",
+    "--log-fingerprints",
     type=bool,
     is_flag=True,
     default=False,

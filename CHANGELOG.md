@@ -13,6 +13,7 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
 
 ### Added
 - Added support for signing and verifying OCI model manifests directly without requiring model files on disk. OCI manifest JSON files can be detected and signed, or verified against. When verifying local files against signatures created from OCI manifests, the tool automatically matches files by path using `org.opencontainers.image.title` annotations (ORAS-style), enabling cross-verification between OCI images and local model directories.
+- Added the `digest` subcommand to compute and print a model's digest. This enables other tools to easily pair the attestations with a model directory.
 - Package renamed to `rh-model-signing` for Red Hat distribution.
 - Added `rh_model_signing` CLI entry point (in addition to `model_signing`).
 
@@ -24,6 +25,7 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
   - Support for `--allow_symlinks` and `--ignore_unsigned_files` options
   - OpenTelemetry tracing support
   - BLAKE3 hashing support
+- Standardized CLI flags to use hyphens (e.g., `--trust-config` instead of `--trust_config`). Underscore variants are still accepted for backwards compatibility via token normalization.
 - Removed Python 3.9 support (EOL 2025-10-31)
 - Added Python 3.14 support
 
