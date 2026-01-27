@@ -16,8 +16,6 @@
 
 from collections.abc import Iterable, Sequence
 import contextlib
-import enum
-import json
 import logging
 import pathlib
 import sys
@@ -25,6 +23,7 @@ import sys
 import click
 
 import model_signing
+from model_signing._oci.registry import ImageReference
 
 
 class NoOpTracer:
@@ -44,72 +43,13 @@ class NoOpTracer:
 tracer = None
 
 
-class PathType(enum.Enum):
-    """Type of path detected for model signing/verification."""
-
-    MODEL_DIRECTORY = "model_directory"
-    OCI_MANIFEST = "oci_manifest"
-
-
-class ModelPath:
-    """Wrapper for a model directory path."""
-
-    def __init__(self, path: pathlib.Path):
-        """Initialize with a model directory path.
-
-        Args:
-            path: Path to the model directory.
-        """
-        self._path = path
-
-    @property
-    def path(self) -> pathlib.Path:
-        """Get the model directory path."""
-        return self._path
-
-    def exists(self) -> bool:
-        """Check if the path exists."""
-        return self._path.exists()
-
-
-class OCIManifestPath:
-    """Wrapper for an OCI manifest JSON file path with cached JSON data."""
-
-    def __init__(self, path: pathlib.Path, data: dict):
-        """Initialize with an OCI manifest file path and parsed JSON data.
-
-        Args:
-            path: Path to the OCI manifest JSON file.
-            data: Parsed JSON data from the manifest file.
-        """
-        self._path = path
-        self._data = data
-
-    @property
-    def path(self) -> pathlib.Path:
-        """Get the OCI manifest file path."""
-        return self._path
-
-    @property
-    def data(self) -> dict:
-        """Get the parsed JSON data from the manifest file."""
-        return self._data
-
-    @property
-    def model_name(self) -> str | None:
-        """Get the model name derived from the manifest file stem."""
-        return self._path.stem if self._path else None
-
-    def exists(self) -> bool:
-        """Check if the path exists."""
-        return self._path.exists()
-
-
-# Decorator for the commonly used argument for the model path or model manifest.
-# This can be either a local model directory or an OCI manifest JSON file.
+# Decorator for the commonly used argument for the model path.
 _model_path_argument = click.argument(
-    "model_path", type=pathlib.Path, metavar="MODEL_PATH_OR_MANIFEST"
+    "model_path", type=pathlib.Path, metavar="MODEL_PATH"
 )
+
+# Decorator for the target argument (image reference or local path).
+_target_argument = click.argument("target", type=str, metavar="TARGET")
 
 
 # Decorator for the commonly used option to set the signature path when signing.
@@ -127,8 +67,7 @@ _read_signature_option = click.option(
     "--signature",
     type=pathlib.Path,
     metavar="SIGNATURE_PATH",
-    required=True,
-    help="Location of the signature file to verify.",
+    help="Location of the signature file (required for file targets).",
 )
 
 # Decorator for the commonly used option for the custom trust configuration.
@@ -219,39 +158,45 @@ _allow_symlinks_option = click.option(
     help="Whether to allow following symlinks when signing or verifying files.",
 )
 
+# Decorator for the attachment mode option (OCI image signing).
+_attachment_mode_option = click.option(
+    "--attachment-mode",
+    type=click.Choice(["referrers", "tag"], case_sensitive=False),
+    default="referrers",
+    show_default=True,
+    help=(
+        "How to attach the signature to the registry. "
+        "'referrers' uses OCI 1.1 Referrers API (recommended). "
+        "'tag' uses tag-based attachment (sha256-DIGEST.sig)."
+    ),
+)
 
-def _detect_path_type(
-    path: pathlib.Path,
-) -> tuple[PathType, ModelPath | OCIManifestPath]:
-    """Detect if a path is a model directory or an OCI manifest file.
+# Decorator for the local model verification option.
+_local_model_option = click.option(
+    "--local-model",
+    type=pathlib.Path,
+    metavar="LOCAL_MODEL_PATH",
+    default=None,
+    help=(
+        "Path to local model files for additional verification. "
+        "When verifying an image, also checks that local files match "
+        "the signed layer digests."
+    ),
+)
 
-    Args:
-        path: The path to detect.
-
-    Returns:
-        A tuple of (PathType, wrapper_object) where wrapper_object is either
-        ModelPath or OCIManifestPath. The OCIManifestPath caches the parsed
-        JSON data to avoid loading it twice.
-
-    Raises:
-        ValueError: If the path is None or invalid.
-    """
-    if path is None:
-        raise ValueError("Path cannot be None")
-
-    if path.is_file() and path.suffix.lower() == ".json":
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and (
-                "layers" in data or "schemaVersion" in data
-            ):
-                return (PathType.OCI_MANIFEST, OCIManifestPath(path, data))
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # Default model dir
-    return (PathType.MODEL_DIRECTORY, ModelPath(path))
+# Decorator for the output mode option (OCI image signing).
+_output_mode_option = click.option(
+    "--output-mode",
+    type=click.Choice(["registry", "file", "both"], case_sensitive=False),
+    default="registry",
+    show_default=True,
+    help=(
+        "Where to output the signature for image targets. "
+        "'registry' attaches to the OCI registry (default). "
+        "'file' writes to disk only (requires --signature). "
+        "'both' attaches to registry AND writes to disk."
+    ),
+)
 
 
 def _resolve_ignore_paths(
@@ -267,6 +212,49 @@ def _resolve_ignore_paths(
         except ValueError:
             continue
     return resolved_paths
+
+
+def _handle_image_signing(
+    config: "model_signing.signing.Config",
+    image_ref: ImageReference,
+    attachment_mode: str,
+    output_mode: str,
+    signature: pathlib.Path,
+) -> None:
+    """Handle common image signing logic for all signing methods.
+
+    Args:
+        config: The signing configuration with signer already set.
+        image_ref: The parsed image reference to sign.
+        attachment_mode: How to attach signature ("referrers" or "tag").
+        output_mode: Where to output ("registry", "file", or "both").
+        signature: Path for signature file output.
+    """
+    write_to_file = output_mode.lower() in ("file", "both")
+    attach_to_registry = output_mode.lower() in ("registry", "both")
+
+    if attach_to_registry:
+        if attachment_mode.lower() == "tag":
+            digest = image_ref.digest or "DIGEST"
+            sig_tag = digest.replace(":", "-") + ".sig"
+            click.echo(
+                f"Pushing signature to: {image_ref.registry}/"
+                f"{image_ref.repository}:{sig_tag}"
+            )
+        else:
+            click.echo(f"Pushing signature to: {image_ref} (referrers API)")
+
+    sig_digest = config.sign_image(
+        image_ref,
+        attachment_mode=attachment_mode,
+        signature_path=signature if write_to_file else None,
+        attach=attach_to_registry,
+    )
+
+    if attach_to_registry:
+        click.echo(f"Signature pushed: {sig_digest}")
+    if write_to_file:
+        click.echo(f"Signature written to: {signature}")
 
 
 class _PKICmdGroup(click.Group):
@@ -414,13 +402,14 @@ def _sign() -> None:
     """Sign models.
 
     Produces a cryptographic signature (in the form of a Sigstore bundle) for a
-    model. We support any model format, either as a single file or as a
-    directory.
+    model. Supports both local files/directories and OCI images.
 
-    You can provide either:
-    - A local model path (directory or file) to sign the model files directly
-    - An OCI image manifest JSON file (from 'skopeo inspect --raw') to sign
-      the image layers without requiring the model files on disk
+    TARGET can be either:
+    - A local file/directory path (e.g., ./my-model)
+    - An OCI image reference (e.g., quay.io/user/model:latest)
+
+    The tool auto-detects the target type: if the path exists locally, it is
+    signed as a file; otherwise, it is treated as an OCI image reference.
 
     We support multiple PKI methods, specified as subcommands. By default, the
     signature is generated via Sigstore (as if invoking `sigstore` subcommand).
@@ -430,11 +419,13 @@ def _sign() -> None:
 
 
 @_sign.command(name="sigstore")
-@_model_path_argument
+@_target_argument
 @_ignore_paths_option
 @_ignore_git_paths_option
 @_allow_symlinks_option
 @_write_signature_option
+@_attachment_mode_option
+@_output_mode_option
 @_sigstore_staging_option
 @_trust_config_option
 @click.option(
@@ -474,11 +465,13 @@ def _sign() -> None:
     help="The custom OpenID Connect client secret to use during OAuth2",
 )
 def _sign_sigstore(
-    model_path: pathlib.Path,
+    target: str,
     ignore_paths: Iterable[pathlib.Path],
     ignore_git_paths: bool,
     allow_symlinks: bool,
     signature: pathlib.Path,
+    attachment_mode: str,
+    output_mode: str,
     use_ambient_credentials: bool,
     use_staging: bool,
     oauth_force_oob: bool,
@@ -489,110 +482,84 @@ def _sign_sigstore(
 ) -> None:
     """Sign using Sigstore (DEFAULT signing method).
 
-    Signing the model at MODEL_PATH, produces the signature at SIGNATURE_PATH
-    (as per `--signature` option). Files in IGNORE_PATHS are not part of the
-    signature.
+    TARGET can be a local file/directory or an OCI image reference.
+    If the path exists locally, it's signed as a file. Otherwise, it's
+    treated as an OCI image reference.
 
-    If using Sigstore, we need to provision an OIDC token. In general, this is
-    taken from an interactive OIDC flow, but ambient credentials could be used
-    to use workload identity tokens (e.g., when running in GitHub actions).
-    Alternatively, a constant identity token can be provided via
-    `--identity-token`.
+    For local files: Creates a signature file (default: model.sig).
 
-    Sigstore allows users to use a staging instance for test-only signatures.
-    Passing the `--use-staging` flag would use that instance instead of the
-    production one.
+    For images: Use --output-mode to control where the signature is stored:
+      - 'registry' (default): Attaches signature to the OCI registry
+      - 'file': Writes signature to disk only (use --signature for path)
+      - 'both': Attaches to registry AND writes to disk
 
-    Additionally, you can specify a custom trust configuration JSON file using
-    the `--trust-config` flag. This allows you to fully customize the PKI
-    (Private Key Infrastructure) used in the signing process. By providing a
-    `--trust-config`, you can define your own transparency logs, certificate
-    authorities, and other trust settings, enabling full control over the
-    trust model, including which PKI to use for signature verification.
+    Sigstore requires an OIDC token for signing. By default, this is obtained
+    via an interactive browser flow. Use --use-ambient-credentials for workload
+    identity tokens (e.g., GitHub Actions), or --identity-token to provide a
+    fixed token.
 
-    If `--trust-config` is not provided, the default Sigstore instance is
-    used, which is pre-configured with Sigstore’s own trusted transparency
-    logs and certificate authorities. This provides a ready-to-use default
-    trust model for most use cases but may not be suitable for custom or
-    highly regulated environments.
+    Use --use-staging for test signatures against Sigstore's staging instance.
+
+    Use --trust-config to specify a custom PKI configuration with your own
+    transparency logs and certificate authorities. If not provided, the default
+    Sigstore production instance is used.
     """
+    is_file = pathlib.Path(target).exists()
+
     with tracer.start_as_current_span("Sign") as span:
         span.set_attribute("sigstore.sign_method", "sigstore")
-        span.set_attribute("sigstore.signature", str(signature))
+        target_type = "file" if is_file else "image"
+        span.set_attribute("sigstore.target_type", target_type)
         span.set_attribute(
             "sigstore.use_ambient_credentials", use_ambient_credentials
         )
         span.set_attribute("sigstore.use_staging", use_staging)
+
         try:
-            path_type, path_wrapper = _detect_path_type(model_path)
+            config = model_signing.signing.Config().use_sigstore_signer(
+                use_ambient_credentials=use_ambient_credentials,
+                use_staging=use_staging,
+                identity_token=identity_token,
+                force_oob=oauth_force_oob,
+                client_id=client_id,
+                client_secret=client_secret,
+                trust_config=trust_config,
+            )
 
-            if path_type == PathType.OCI_MANIFEST:
-                oci_manifest = path_wrapper
-                assert isinstance(oci_manifest, OCIManifestPath)
-                if not oci_manifest.exists():
-                    click.echo(
-                        f"OCI manifest file not found: {oci_manifest.path}",
-                        err=True,
-                    )
-                    sys.exit(1)
-
-                span.set_attribute(
-                    "sigstore.oci_manifest", str(oci_manifest.path)
-                )
-
-                model_manifest = (
-                    model_signing.hashing.create_manifest_from_oci_layers(
-                        oci_manifest.data, model_name=oci_manifest.model_name
-                    )
-                )
-
-                model_signing.signing.Config().use_sigstore_signer(
-                    use_ambient_credentials=use_ambient_credentials,
-                    use_staging=use_staging,
-                    identity_token=identity_token,
-                    force_oob=oauth_force_oob,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    trust_config=trust_config,
-                ).sign_from_manifest(model_manifest, signature)
-            else:
-                model_path_obj = path_wrapper
-                assert isinstance(model_path_obj, ModelPath)
-
-                span.set_attribute(
-                    "sigstore.model_path", str(model_path_obj.path)
-                )
+            if is_file:
+                model_path = pathlib.Path(target)
+                span.set_attribute("sigstore.model_path", str(model_path))
+                span.set_attribute("sigstore.signature", str(signature))
                 ignored = _resolve_ignore_paths(
-                    model_path_obj.path, list(ignore_paths) + [signature]
+                    model_path, list(ignore_paths) + [signature]
                 )
-                model_signing.signing.Config().use_sigstore_signer(
-                    use_ambient_credentials=use_ambient_credentials,
-                    use_staging=use_staging,
-                    identity_token=identity_token,
-                    force_oob=oauth_force_oob,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    trust_config=trust_config,
-                ).set_hashing_config(
+                config.set_hashing_config(
                     model_signing.hashing.Config()
                     .set_ignored_paths(
                         paths=ignored, ignore_git_paths=ignore_git_paths
                     )
                     .set_allow_symlinks(allow_symlinks)
-                ).sign(model_path_obj.path, signature)
+                ).sign(model_path, signature)
+                click.echo("Signing succeeded")
+            else:
+                image_ref = ImageReference.parse(target)
+                _handle_image_signing(
+                    config, image_ref, attachment_mode, output_mode, signature
+                )
+
         except Exception as err:
             click.echo(f"Signing failed with error: {err}", err=True)
             sys.exit(1)
 
-        click.echo("Signing succeeded")
-
 
 @_sign.command(name="key")
-@_model_path_argument
+@_target_argument
 @_ignore_paths_option
 @_ignore_git_paths_option
 @_allow_symlinks_option
 @_write_signature_option
+@_attachment_mode_option
+@_output_mode_option
 @_private_key_option
 @click.option(
     "--password",
@@ -600,71 +567,73 @@ def _sign_sigstore(
     metavar="PASSWORD",
     help="Password for the key encryption, if any",
 )
-def _sign_private_key(
-    model_path: pathlib.Path,
+def _sign_key(
+    target: str,
     ignore_paths: Iterable[pathlib.Path],
     ignore_git_paths: bool,
     allow_symlinks: bool,
     signature: pathlib.Path,
+    attachment_mode: str,
+    output_mode: str,
     private_key: pathlib.Path,
     password: str | None = None,
 ) -> None:
     """Sign using a private key (paired with a public one).
 
-    Signing the model at MODEL_PATH_OR_MANIFEST, produces the signature at
-    SIGNATURE_PATH (as per `--signature` option). Files in IGNORE_PATHS are not
-    part of the signature.
+    TARGET can be a local file/directory or an OCI image reference.
+    If the path exists locally, it's signed as a file. Otherwise, it's
+    treated as an OCI image reference.
 
-    Traditionally, signing could be achieved by using a public/private key pair.
-    Pass the signing key using `--private_key`.
+    For local files: Creates a signature file (default: model.sig).
 
-    Note that this method does not provide a way to tie to the identity of the
-    signer, outside of pairing the keys. Also note that we don't offer key
-    management protocols.
+    For images: Use --output-mode to control where the signature is stored:
+      - 'registry' (default): Attaches signature to the OCI registry
+      - 'file': Writes signature to disk only (use --signature for path)
+      - 'both': Attaches to registry AND writes to disk
+
+    The private key must be an elliptic curve key (NIST P-256, P-384, or P-521)
+    in PEM format. Use --password if the key is encrypted. Verification
+    requires the corresponding public key.
+
+    Note: This method does not tie to a signer identity like Sigstore does.
+    Key management is the user's responsibility.
     """
-    try:
-        path_type, path_wrapper = _detect_path_type(model_path)
+    is_file = pathlib.Path(target).exists()
 
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
+    with tracer.start_as_current_span("Sign") as span:
+        span.set_attribute("sigstore.sign_method", "key")
+        target_type = "file" if is_file else "image"
+        span.set_attribute("sigstore.target_type", target_type)
 
-            model_manifest = (
-                model_signing.hashing.create_manifest_from_oci_layers(
-                    oci_manifest.data, model_name=oci_manifest.model_name
-                )
+        try:
+            config = model_signing.signing.Config().use_elliptic_key_signer(
+                private_key=private_key, password=password
             )
 
-            model_signing.signing.Config().use_elliptic_key_signer(
-                private_key=private_key, password=password
-            ).sign_from_manifest(model_manifest, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
-            )
-            model_signing.signing.Config().use_elliptic_key_signer(
-                private_key=private_key, password=password
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
+            if is_file:
+                model_path = pathlib.Path(target)
+                span.set_attribute("sigstore.model_path", str(model_path))
+                span.set_attribute("sigstore.signature", str(signature))
+                ignored = _resolve_ignore_paths(
+                    model_path, list(ignore_paths) + [signature]
                 )
-                .set_allow_symlinks(allow_symlinks)
-            ).sign(model_path_obj.path, signature)
-    except Exception as err:
-        click.echo(f"Signing failed with error: {err}", err=True)
-        sys.exit(1)
+                config.set_hashing_config(
+                    model_signing.hashing.Config()
+                    .set_ignored_paths(
+                        paths=ignored, ignore_git_paths=ignore_git_paths
+                    )
+                    .set_allow_symlinks(allow_symlinks)
+                ).sign(model_path, signature)
+                click.echo("Signing succeeded")
+            else:
+                image_ref = ImageReference.parse(target)
+                _handle_image_signing(
+                    config, image_ref, attachment_mode, output_mode, signature
+                )
 
-    click.echo("Signing succeeded")
+        except Exception as err:
+            click.echo(f"Signing failed with error: {err}", err=True)
+            sys.exit(1)
 
 
 @_sign.command(name="pkcs11-key")
@@ -684,55 +653,28 @@ def _sign_pkcs11_key(
 ) -> None:
     """Sign using a private key using a PKCS #11 URI.
 
-    Signing the model at MODEL_PATH_OR_MANIFEST, produces the signature at
-    SIGNATURE_PATH (as per `--signature` option). Files in IGNORE_PATHS are not
-    part of the signature.
+    Signing the model at MODEL_PATH, produces the signature at SIGNATURE_PATH
+    (as per `--signature` option). Files in IGNORE_PATHS are not part of the
+    signature.
 
     Traditionally, signing could be achieved by using a public/private key pair.
-    Pass the PKCS #11 URI of the signing key using `--pkcs11_uri`.
+    Pass the PKCS #11 URI of the signing key using `--pkcs11-uri`.
 
     Note that this method does not provide a way to tie to the identity of the
     signer, outside of pairing the keys. Also note that we don't offer key
     management protocols.
     """
     try:
-        path_type, path_wrapper = _detect_path_type(model_path)
-
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
-
-            model_manifest = (
-                model_signing.hashing.create_manifest_from_oci_layers(
-                    oci_manifest.data, model_name=oci_manifest.model_name
-                )
-            )
-
-            model_signing.signing.Config().use_pkcs11_signer(
-                pkcs11_uri=pkcs11_uri
-            ).sign_from_manifest(model_manifest, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
-            )
-            model_signing.signing.Config().use_pkcs11_signer(
-                pkcs11_uri=pkcs11_uri
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
-                )
-                .set_allow_symlinks(allow_symlinks)
-            ).sign(model_path_obj.path, signature)
+        ignored = _resolve_ignore_paths(
+            model_path, list(ignore_paths) + [signature]
+        )
+        model_signing.signing.Config().use_pkcs11_signer(
+            pkcs11_uri=pkcs11_uri
+        ).set_hashing_config(
+            model_signing.hashing.Config()
+            .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
+            .set_allow_symlinks(allow_symlinks)
+        ).sign(model_path, signature)
     except Exception as err:
         click.echo(f"Signing failed with error: {err}", err=True)
         sys.exit(1)
@@ -761,62 +703,33 @@ def _sign_certificate(
 ) -> None:
     """Sign using a certificate.
 
-    Signing the model at MODEL_PATH_OR_MANIFEST, produces the signature at
-    SIGNATURE_PATH (as per `--signature` option). Files in IGNORE_PATHS are not
-    part of the signature.
+    Signing the model at MODEL_PATH, produces the signature at SIGNATURE_PATH
+    (as per `--signature` option). Files in IGNORE_PATHS are not part of the
+    signature.
 
     Traditionally, signing can be achieved by using keys from a certificate.
     The certificate can also provide the identity of the signer, making this
     method more informative than just using a public/private key pair for
-    signing.  Pass the private signing key using `--private_key` and signing
-    certificate via `--signing_certificate`. Optionally, pass a certificate
-    chain via `--certificate_chain` to establish root of trust (this option can
+    signing.  Pass the private signing key using `--private-key` and signing
+    certificate via `--signing-certificate`. Optionally, pass a certificate
+    chain via `--certificate-chain` to establish root of trust (this option can
     be repeated as needed, or all cerificates could be placed in a single file).
 
     Note that we don't offer certificate and key management protocols.
     """
     try:
-        path_type, path_wrapper = _detect_path_type(model_path)
-
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
-
-            model_manifest = (
-                model_signing.hashing.create_manifest_from_oci_layers(
-                    oci_manifest.data, model_name=oci_manifest.model_name
-                )
-            )
-
-            model_signing.signing.Config().use_certificate_signer(
-                private_key=private_key,
-                signing_certificate=signing_certificate,
-                certificate_chain=certificate_chain,
-            ).sign_from_manifest(model_manifest, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
-            )
-            model_signing.signing.Config().use_certificate_signer(
-                private_key=private_key,
-                signing_certificate=signing_certificate,
-                certificate_chain=certificate_chain,
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
-                )
-                .set_allow_symlinks(allow_symlinks)
-            ).sign(model_path_obj.path, signature)
+        ignored = _resolve_ignore_paths(
+            model_path, list(ignore_paths) + [signature]
+        )
+        model_signing.signing.Config().use_certificate_signer(
+            private_key=private_key,
+            signing_certificate=signing_certificate,
+            certificate_chain=certificate_chain,
+        ).set_hashing_config(
+            model_signing.hashing.Config()
+            .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
+            .set_allow_symlinks(allow_symlinks)
+        ).sign(model_path, signature)
     except Exception as err:
         click.echo(f"Signing failed with error: {err}", err=True)
         sys.exit(1)
@@ -845,63 +758,34 @@ def _sign_pkcs11_certificate(
 ) -> None:
     """Sign using a certificate.
 
-    Signing the model at MODEL_PATH_OR_MANIFEST, produces the signature at
-    SIGNATURE_PATH (as per `--signature` option). Files in IGNORE_PATHS are not
-    part of the signature.
+    Signing the model at MODEL_PATH, produces the signature at SIGNATURE_PATH
+    (as per `--signature` option). Files in IGNORE_PATHS are not part of the
+    signature.
 
     Traditionally, signing can be achieved by using keys from a certificate.
     The certificate can also provide the identity of the signer, making this
     method more informative than just using a public/private key pair for
     signing. Pass the PKCS #11 URI of the private signing key using
-    `--pkcs11_uri` and then signing certificate via `--signing_certificate`.
-    Optionally, pass a certificate chain via `--certificate_chain` to establish
+    `--pkcs11-uri` and then signing certificate via `--signing-certificate`.
+    Optionally, pass a certificate chain via `--certificate-chain` to establish
     root of trust (this option can be repeated as needed, or all cerificates
     could be placed in a single file).
 
     Note that we don't offer certificate and key management protocols.
     """
     try:
-        path_type, path_wrapper = _detect_path_type(model_path)
-
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
-
-            model_manifest = (
-                model_signing.hashing.create_manifest_from_oci_layers(
-                    oci_manifest.data, model_name=oci_manifest.model_name
-                )
-            )
-
-            model_signing.signing.Config().use_pkcs11_certificate_signer(
-                pkcs11_uri=pkcs11_uri,
-                signing_certificate=signing_certificate,
-                certificate_chain=certificate_chain,
-            ).sign_from_manifest(model_manifest, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
-            )
-            model_signing.signing.Config().use_pkcs11_certificate_signer(
-                pkcs11_uri=pkcs11_uri,
-                signing_certificate=signing_certificate,
-                certificate_chain=certificate_chain,
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
-                )
-                .set_allow_symlinks(allow_symlinks)
-            ).sign(model_path_obj.path, signature)
+        ignored = _resolve_ignore_paths(
+            model_path, list(ignore_paths) + [signature]
+        )
+        model_signing.signing.Config().use_pkcs11_certificate_signer(
+            pkcs11_uri=pkcs11_uri,
+            signing_certificate=signing_certificate,
+            certificate_chain=certificate_chain,
+        ).set_hashing_config(
+            model_signing.hashing.Config()
+            .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
+            .set_allow_symlinks(allow_symlinks)
+        ).sign(model_path, signature)
     except Exception as err:
         click.echo(f"Signing failed with error: {err}", err=True)
         sys.exit(1)
@@ -914,14 +798,15 @@ def _verify() -> None:
     """Verify models.
 
     Given a model and a cryptographic signature (in the form of a Sigstore
-    bundle) for the model, this call checks that the model matches the
-    signature, that the model has not been tampered with. We support any model
-    format, either as a single file or as a directory.
+    bundle), this verifies that the model matches the signature and has not
+    been tampered with. Supports both local files/directories and OCI images.
 
-    You can provide either:
-    - A local model path (directory or file) to verify the model files directly
-    - An OCI image manifest JSON file (from 'skopeo inspect --raw') to verify
-      against the image layers without requiring the model files on disk
+    TARGET can be either:
+    - A local file/directory path (e.g., ./my-model)
+    - An OCI image reference (e.g., quay.io/user/model:latest)
+
+    The tool auto-detects the target type: if the path exists locally, it is
+    verified as a file; otherwise, it is treated as an OCI image reference.
 
     We support multiple PKI methods, specified as subcommands. By default, the
     signature is assumed to be generated via Sigstore (as if invoking `sigstore`
@@ -938,11 +823,13 @@ def _verify() -> None:
 
 
 @_verify.command(name="sigstore")
-@_model_path_argument
+@_target_argument
 @_read_signature_option
 @_ignore_paths_option
 @_ignore_git_paths_option
 @_allow_symlinks_option
+@_attachment_mode_option
+@_local_model_option
 @_sigstore_staging_option
 @_trust_config_option
 @click.option(
@@ -961,93 +848,117 @@ def _verify() -> None:
 )
 @_ignore_unsigned_files_option
 def _verify_sigstore(
-    model_path: pathlib.Path,
-    signature: pathlib.Path,
+    target: str,
+    signature: pathlib.Path | None,
     ignore_paths: Iterable[pathlib.Path],
     ignore_git_paths: bool,
     allow_symlinks: bool,
+    attachment_mode: str,
+    local_model: pathlib.Path | None,
     identity: str,
     identity_provider: str,
     use_staging: bool,
     ignore_unsigned_files: bool,
     trust_config: pathlib.Path | None = None,
 ) -> None:
-    """Verify using Sigstore (DEFAULT verification method).
+    r"""Verify using Sigstore (DEFAULT verification method).
 
-    Verifies the integrity of model at MODEL_PATH, according to signature from
-    SIGNATURE_PATH (given via `--signature` option). Files in IGNORE_PATHS are
-    ignored.
+    TARGET can be a local file/directory or an OCI image reference.
+    If the path exists locally, it's verified as a file. Otherwise, it's
+    treated as an OCI image reference.
 
-    For Sigstore, we also need to provide an expected identity and identity
-    provider for the signature. If these don't match what is provided in the
-    signature, verification would fail.
+    For local files: Requires --signature option.
+    For images: Fetches signature from registry.
+
+    The --identity and --identity-provider must match the signer's identity
+    from the OIDC token used during signing. Common providers include:
+    - Google: https://accounts.google.com
+    - GitHub: https://github.com/login/oauth
+    - GitHub Actions: https://token.actions.githubusercontent.com
+    - Microsoft: https://login.microsoftonline.com
+
+    Use --use-staging if the signature was created with Sigstore's staging
+    instance. Use --trust-config for custom PKI configurations.
     """
+    is_file = pathlib.Path(target).exists()
+
     with tracer.start_as_current_span("Verify") as span:
         span.set_attribute("sigstore.method", "sigstore")
-        span.set_attribute("sigstore.signature", str(signature))
+        target_type = "file" if is_file else "image"
+        span.set_attribute("sigstore.target_type", target_type)
         span.set_attribute("sigstore.identity", identity)
         span.set_attribute("sigstore.oidc_issuer", identity_provider)
         span.set_attribute("sigstore.use_staging", use_staging)
+
         try:
-            path_type, path_wrapper = _detect_path_type(model_path)
+            config = model_signing.verifying.Config().use_sigstore_verifier(
+                identity=identity,
+                oidc_issuer=identity_provider,
+                use_staging=use_staging,
+                trust_config=trust_config,
+            )
 
-            if path_type == PathType.OCI_MANIFEST:
-                oci_manifest = path_wrapper
-                assert isinstance(oci_manifest, OCIManifestPath)
-                if not oci_manifest.exists():
-                    click.echo(
-                        f"OCI manifest file not found: {oci_manifest.path}",
-                        err=True,
+            if is_file:
+                if signature is None:
+                    raise click.UsageError(
+                        "--signature is required when verifying local files"
                     )
-                    sys.exit(1)
-
-                span.set_attribute(
-                    "sigstore.oci_manifest", str(oci_manifest.path)
-                )
-
-                model_signing.verifying.Config().use_sigstore_verifier(
-                    identity=identity,
-                    oidc_issuer=identity_provider,
-                    use_staging=use_staging,
-                    trust_config=trust_config,
-                ).verify_from_oci_manifest(oci_manifest.data, signature)
-            else:
-                model_path_obj = path_wrapper
-                assert isinstance(model_path_obj, ModelPath)
-
-                span.set_attribute(
-                    "sigstore.model_path", str(model_path_obj.path)
-                )
+                model_path = pathlib.Path(target)
+                span.set_attribute("sigstore.model_path", str(model_path))
+                span.set_attribute("sigstore.signature", str(signature))
+                click.echo(f"Verifying: {model_path}")
+                click.echo(f"Signature: {signature}")
                 ignored = _resolve_ignore_paths(
-                    model_path_obj.path, list(ignore_paths) + [signature]
+                    model_path, list(ignore_paths) + [signature]
                 )
-                model_signing.verifying.Config().use_sigstore_verifier(
-                    identity=identity,
-                    oidc_issuer=identity_provider,
-                    use_staging=use_staging,
-                    trust_config=trust_config,
-                ).set_hashing_config(
+                config.set_hashing_config(
                     model_signing.hashing.Config()
                     .set_ignored_paths(
                         paths=ignored, ignore_git_paths=ignore_git_paths
                     )
                     .set_allow_symlinks(allow_symlinks)
                 ).set_ignore_unsigned_files(ignore_unsigned_files).verify(
-                    model_path_obj.path, signature
+                    model_path, signature
                 )
-        except Exception as err:
-            click.echo(f"Verification failed with error: {err}", err=True)
-            sys.exit(1)
+            else:
+                image_ref = ImageReference.parse(target)
+                click.echo(f"Verifying: {image_ref}")
+                use_default = attachment_mode == "referrers"
+                mode = None if use_default else attachment_mode
+                if mode == "tag":
+                    click.echo("Fetching signature from tag...")
+                elif mode is None:
+                    click.echo("Fetching signature from registry...")
+                else:
+                    click.echo("Fetching signature via referrers API...")
+                config.verify_image(
+                    image_ref,
+                    local_model_path=local_model,
+                    attachment_mode=mode,
+                    ignore_git_paths=ignore_git_paths,
+                )
+                if local_model:
+                    click.echo(f"Local files verified: {local_model}")
 
-        click.echo("Verification succeeded")
+            click.echo("\nThe following checks were performed:")
+            click.echo("  - Signature verified against Sigstore bundle")
+            click.echo("  - Signing identity matched")
+            click.echo("  - OIDC issuer matched")
+            click.echo("\nVerification succeeded")
+
+        except Exception as err:
+            click.echo(f"Verification failed:\n{err}", err=True)
+            sys.exit(1)
 
 
 @_verify.command(name="key")
-@_model_path_argument
+@_target_argument
 @_read_signature_option
 @_ignore_paths_option
 @_ignore_git_paths_option
 @_allow_symlinks_option
+@_attachment_mode_option
+@_local_model_option
 @click.option(
     "--public-key",
     type=pathlib.Path,
@@ -1056,67 +967,91 @@ def _verify_sigstore(
     help="Path to the public key used for verification.",
 )
 @_ignore_unsigned_files_option
-def _verify_private_key(
-    model_path: pathlib.Path,
-    signature: pathlib.Path,
+def _verify_key(
+    target: str,
+    signature: pathlib.Path | None,
     ignore_paths: Iterable[pathlib.Path],
     ignore_git_paths: bool,
     allow_symlinks: bool,
+    attachment_mode: str,
+    local_model: pathlib.Path | None,
     public_key: pathlib.Path,
     ignore_unsigned_files: bool,
 ) -> None:
-    """Verify using a public key (paired with a private one).
+    r"""Verify using a public key (paired with a private one).
 
-    Verifies the integrity of model at MODEL_PATH_OR_MANIFEST, according to
-    signature from SIGNATURE_PATH (given via `--signature` option). Files in
-    IGNORE_PATHS are ignored.
+    TARGET can be a local file/directory or an OCI image reference.
+    If the path exists locally, it's verified as a file. Otherwise, it's
+    treated as an OCI image reference.
 
-    The public key provided via `--public_key` must have been paired with the
-    private key used when generating the signature.
+    For local files: Requires --signature option.
+    For images: Fetches signature from registry.
 
-    Note that this method does not provide a way to tie to the identity of the
-    signer, outside of pairing the keys. Also note that we don't offer key
-    management protocols.
+    The public key must correspond to the private key used for signing. It can
+    be in PEM format (file) or raw/compressed format. Supported curves are
+    NIST P-256, P-384, and P-521.
     """
-    try:
-        path_type, path_wrapper = _detect_path_type(model_path)
+    is_file = pathlib.Path(target).exists()
 
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
+    with tracer.start_as_current_span("Verify") as span:
+        span.set_attribute("sigstore.method", "key")
+        target_type = "file" if is_file else "image"
+        span.set_attribute("sigstore.target_type", target_type)
 
-            model_signing.verifying.Config().use_elliptic_key_verifier(
+        try:
+            config = model_signing.verifying.Config().use_elliptic_key_verifier(
                 public_key=public_key
-            ).verify_from_oci_manifest(oci_manifest.data, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
             )
-            model_signing.verifying.Config().use_elliptic_key_verifier(
-                public_key=public_key
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
+
+            if is_file:
+                if signature is None:
+                    raise click.UsageError(
+                        "--signature is required when verifying local files"
+                    )
+                model_path = pathlib.Path(target)
+                span.set_attribute("sigstore.model_path", str(model_path))
+                span.set_attribute("sigstore.signature", str(signature))
+                click.echo(f"Verifying: {model_path}")
+                click.echo(f"Signature: {signature}")
+                ignored = _resolve_ignore_paths(
+                    model_path, list(ignore_paths) + [signature]
                 )
-                .set_allow_symlinks(allow_symlinks)
-            ).set_ignore_unsigned_files(ignore_unsigned_files).verify(
-                model_path_obj.path, signature
-            )
-    except Exception as err:
-        click.echo(f"Verification failed with error: {err}", err=True)
-        sys.exit(1)
+                config.set_hashing_config(
+                    model_signing.hashing.Config()
+                    .set_ignored_paths(
+                        paths=ignored, ignore_git_paths=ignore_git_paths
+                    )
+                    .set_allow_symlinks(allow_symlinks)
+                ).set_ignore_unsigned_files(ignore_unsigned_files).verify(
+                    model_path, signature
+                )
+            else:
+                image_ref = ImageReference.parse(target)
+                click.echo(f"Verifying: {image_ref}")
+                use_default = attachment_mode == "referrers"
+                mode = None if use_default else attachment_mode
+                if mode == "tag":
+                    click.echo("Fetching signature from tag...")
+                elif mode is None:
+                    click.echo("Fetching signature from registry...")
+                else:
+                    click.echo("Fetching signature via referrers API...")
+                config.verify_image(
+                    image_ref,
+                    local_model_path=local_model,
+                    attachment_mode=mode,
+                    ignore_git_paths=ignore_git_paths,
+                )
+                if local_model:
+                    click.echo(f"Local files verified: {local_model}")
 
-    click.echo("Verification succeeded")
+            click.echo("\nThe following checks were performed:")
+            click.echo("  - Signature verified against public key")
+            click.echo("\nVerification succeeded")
+
+        except Exception as err:
+            click.echo(f"Verification failed:\n{err}", err=True)
+            sys.exit(1)
 
 
 @_verify.command(name="certificate")
@@ -1147,13 +1082,13 @@ def _verify_certificate(
 ) -> None:
     """Verify using a certificate.
 
-    Verifies the integrity of model at MODEL_PATH_OR_MANIFEST, according to
-    signature from SIGNATURE_PATH (given via `--signature` option). Files in
-    IGNORE_PATHS are ignored.
+    Verifies the integrity of model at MODEL_PATH, according to signature from
+    SIGNATURE_PATH (given via `--signature` option). Files in IGNORE_PATHS are
+    ignored.
 
     The signing certificate is encoded in the signature, as part of the Sigstore
     bundle. To verify the root of trust, pass additional certificates in the
-    certificate chain, using `--certificate_chain` (this option can be repeated
+    certificate chain, using `--certificate-chain` (this option can be repeated
     as needed, or all certificates could be placed in a single file).
 
     Note that we don't offer certificate and key management protocols.
@@ -1162,43 +1097,21 @@ def _verify_certificate(
         logging.basicConfig(format="%(message)s", level=logging.INFO)
 
     try:
-        path_type, path_wrapper = _detect_path_type(model_path)
-
-        if path_type == PathType.OCI_MANIFEST:
-            oci_manifest = path_wrapper
-            assert isinstance(oci_manifest, OCIManifestPath)
-            if not oci_manifest.exists():
-                click.echo(
-                    f"OCI manifest file not found: {oci_manifest.path}",
-                    err=True,
-                )
-                sys.exit(1)
-
-            model_signing.verifying.Config().use_certificate_verifier(
-                certificate_chain=certificate_chain,
-                log_fingerprints=log_fingerprints,
-            ).verify_from_oci_manifest(oci_manifest.data, signature)
-        else:
-            model_path_obj = path_wrapper
-            assert isinstance(model_path_obj, ModelPath)
-
-            ignored = _resolve_ignore_paths(
-                model_path_obj.path, list(ignore_paths) + [signature]
-            )
-            model_signing.verifying.Config().use_certificate_verifier(
-                certificate_chain=certificate_chain,
-                log_fingerprints=log_fingerprints,
-            ).set_hashing_config(
-                model_signing.hashing.Config()
-                .set_ignored_paths(
-                    paths=ignored, ignore_git_paths=ignore_git_paths
-                )
-                .set_allow_symlinks(allow_symlinks)
-            ).set_ignore_unsigned_files(ignore_unsigned_files).verify(
-                model_path_obj.path, signature
-            )
+        ignored = _resolve_ignore_paths(
+            model_path, list(ignore_paths) + [signature]
+        )
+        model_signing.verifying.Config().use_certificate_verifier(
+            certificate_chain=certificate_chain,
+            log_fingerprints=log_fingerprints,
+        ).set_hashing_config(
+            model_signing.hashing.Config()
+            .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
+            .set_allow_symlinks(allow_symlinks)
+        ).set_ignore_unsigned_files(ignore_unsigned_files).verify(
+            model_path, signature
+        )
     except Exception as err:
-        click.echo(f"Verification failed with error: {err}", err=True)
+        click.echo(f"Verification failed:\n{err}", err=True)
         sys.exit(1)
 
     click.echo("Verification succeeded")

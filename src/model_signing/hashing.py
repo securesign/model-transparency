@@ -128,36 +128,52 @@ def create_manifest_from_oci_layers(
     model_name: str | None = None,
     include_config: bool = True,
 ) -> manifest.Manifest:
-    """Create a manifest from an OCI image manifest.
+    """Convert an OCI image manifest into a model signing manifest.
 
-    This function extracts layer digests from an OCI image manifest (as returned
-    by `skopeo inspect --raw`) and creates a model signing manifest. Each layer
-    is treated as a file entry in the manifest.
+    This function takes an OCI image manifest (the registry artifact descriptor
+    containing layer references) and converts it into a model signing manifest
+    (our internal representation of file paths and their digests).
+
+    For ORAS-style artifacts, file paths are extracted from the
+    `org.opencontainers.image.title` annotation on each layer. For standard
+    OCI images, layers are named generically as `layer_000.tar.gz`, etc.
 
     Args:
         oci_manifest: The OCI image manifest as a dictionary (from JSON).
-          Expected to have "layers" array with "digest" fields, and optionally
-          a "config" field with a "digest".
+          This is the artifact manifest from the registry containing layer
+          descriptors with digests. Expected to have "layers" array with
+          "digest" fields, and optionally a "config" field.
         model_name: Optional name for the model. If not provided, will attempt
           to extract from annotations or use "oci-image".
         include_config: Whether to include the config blob digest as a file
           entry. Default is True.
 
     Returns:
-        A Manifest object ready for signing.
+        A model signing Manifest containing file/layer paths mapped to their
+        SHA256 digests, ready for signing or comparison.
 
     Raises:
-        ValueError: If the OCI manifest structure is invalid or missing required
-          fields.
+        ValueError: If the OCI image manifest structure is invalid or missing
+          required fields.
     """
     if "layers" not in oci_manifest:
         raise ValueError("OCI manifest missing 'layers' field")
 
     manifest_items = []
 
+    # Collect layer paths first to detect conflicts with config
+    layer_paths = set()
+    for layer in oci_manifest["layers"]:
+        if "annotations" in layer:
+            title = layer["annotations"].get("org.opencontainers.image.title")
+            if title:
+                layer_paths.add(title)
+
+    # Only include OCI config if it won't conflict with a layer named
+    # config.json (ORAS artifacts have placeholder config, files are in layers)
     if include_config and "config" in oci_manifest:
         config = oci_manifest["config"]
-        if "digest" in config:
+        if "digest" in config and "config.json" not in layer_paths:
             config_digest = parse_digest_string(config["digest"])
             config_path = pathlib.PurePosixPath("config.json")
             manifest_items.append(
