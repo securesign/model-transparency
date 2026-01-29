@@ -128,7 +128,7 @@ class Signer(signing.Signer):
         if not oidc_issuer:
             oidc_issuer = trust_config.signing_config.get_oidc_url()
 
-        self._issuer = sigstore_oidc.Issuer(oidc_issuer)
+        self._oidc_issuer = oidc_issuer
         self._signing_context = (
             sigstore_signer.SigningContext.from_trust_config(trust_config)
         )
@@ -155,7 +155,8 @@ class Signer(signing.Signer):
             if token:
                 return sigstore_oidc.IdentityToken(token, self._client_id)
 
-        return self._issuer.identity_token(
+        issuer = sigstore_oidc.Issuer(self._oidc_issuer)
+        return issuer.identity_token(
             force_oob=self._force_oob,
             client_id=self._client_id,
             client_secret=self._client_secret,
