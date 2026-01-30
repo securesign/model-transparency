@@ -203,7 +203,6 @@ class OrasClient:
             tls_verify=self._tls_verify,
         )
         reg.auth.load_configs(reg.get_container(str(image_ref)))
-        self._registry_cache[hostname] = reg
         return reg
 
     def _base_url(self, image_ref: ImageReference) -> str:
@@ -246,6 +245,7 @@ class OrasClient:
             pass
 
         upload_url = f"{base_url}/v2/{image_ref.repository}/blobs/uploads/"
+        reg = self._auth_registry(image_ref)
         response = reg.do_request(upload_url, "POST")
         location = response.headers.get("Location")
         if not location:
