@@ -26,7 +26,7 @@ model_signing.verifying.Config().use_sigstore_verifier(
 The same verification configuration can be used to verify multiple models:
 
 ```python
-verifying_config = model_signing.signing.Config().use_elliptic_key_verifier(
+verifying_config = model_signing.verifying.Config().use_elliptic_key_verifier(
     public_key="key.pub"
 )
 
@@ -34,16 +34,49 @@ for model in all_models:
     verifying_config.verify(model, f"{model}_sharded.sig")
 ```
 
+## OCI Image Verification
+
+The module supports verifying OCI container images signed in registries.
+
+**Note:** OCI image verification currently supports Sigstore and elliptic key
+verification only. Certificate-based verification is not yet supported.
+
+```python
+# Verify a Sigstore-signed image
+model_signing.verifying.Config().use_sigstore_verifier(
+    identity="user@example.com", oidc_issuer="https://accounts.google.com"
+).verify_image("quay.io/user/model:latest")
+
+# Verify a key-signed image
+model_signing.verifying.Config().use_elliptic_key_verifier(
+    public_key="key.pub"
+).verify_image("quay.io/user/model:latest")
+
+# Verify image AND check that local files match the signed layers
+model_signing.verifying.Config().use_sigstore_verifier(
+    identity="user@example.com", oidc_issuer="https://accounts.google.com"
+).verify_image(
+    "quay.io/user/model:latest", local_model_path="./downloaded-model"
+)
+```
+
+Registry authentication uses existing Docker/Podman credentials from
+`~/.docker/config.json` or `${XDG_RUNTIME_DIR}/containers/auth.json`.
+
 The API defined here is stable and backwards compatible.
 """
 
 from collections.abc import Iterable
+import hashlib
+import json
 import pathlib
 import sys
 
 from model_signing import hashing
 from model_signing import manifest
 from model_signing._hashing import hashing as _hashing
+from model_signing._oci import attachment as oci_attachment
+from model_signing._oci import registry as oci_registry
 from model_signing._signing import sign_certificate as certificate
 from model_signing._signing import sign_ec_key as ec_key
 from model_signing._signing import sign_sigstore as sigstore
@@ -54,6 +87,50 @@ if sys.version_info >= (3, 11):
     from typing import Self
 else:
     from typing_extensions import Self
+
+
+def _format_verification_error(
+    missing: list[str], extra: list[str], mismatched: list[tuple[str, str, str]]
+) -> str:
+    """Format verification errors into a readable message.
+
+    Args:
+        missing: List of missing file paths.
+        extra: List of extra file paths not in signature.
+        mismatched: List of (path, expected_hash, actual_hash) tuples.
+
+    Returns:
+        Formatted error message.
+    """
+    sections = []
+
+    if missing:
+        items = [f"    {f}" for f in missing[:5]]
+        if len(missing) > 5:
+            items.append(f"    ... and {len(missing) - 5} more")
+        header = f"  Missing files ({len(missing)}):"
+        sections.append(header + "\n" + "\n".join(items))
+
+    if extra:
+        items = [f"    {f}" for f in extra[:5]]
+        if len(extra) > 5:
+            items.append(f"    ... and {len(extra) - 5} more")
+        header = f"  Extra files ({len(extra)}):"
+        sections.append(header + "\n" + "\n".join(items))
+
+    if mismatched:
+        items = []
+        for path, expected, actual in mismatched[:5]:
+            exp = expected[:16] + "..." if len(expected) > 16 else expected
+            act = actual[:16] + "..." if len(actual) > 16 else actual
+            items.append(f"    {path}: expected {exp}, got {act}")
+        if len(mismatched) > 5:
+            items.append(f"    ... and {len(mismatched) - 5} more")
+        sections.append(
+            f"  Hash mismatches ({len(mismatched)}):\n" + "\n".join(items)
+        )
+
+    return "\n".join(sections)
 
 
 class Config:
@@ -123,28 +200,34 @@ class Config:
         )
 
         if actual_manifest != expected_manifest:
-            diff_message = self._get_manifest_diff(
-                actual_manifest, expected_manifest
+            raise ValueError(
+                self._get_manifest_diff(actual_manifest, expected_manifest)
             )
-            raise ValueError(f"Signature mismatch: {diff_message}")
+
+    _GIT_PATHS = frozenset([".git", ".gitattributes", ".github", ".gitignore"])
 
     def _verify_oci_layers_from_files(
-        self, model_path: hashing.PathLike, expected_manifest: manifest.Manifest
+        self,
+        model_path: hashing.PathLike,
+        expected_manifest: manifest.Manifest,
+        ignore_git_paths: bool = True,
     ):
-        """Verify OCI layer-based signature against local files.
+        """Verify local files match the signed model signing manifest.
 
-        This verifies by matching file paths from the signature with local
-        files. If the signature was created from an OCI manifest with file
-        path annotations (e.g., org.opencontainers.image.title), it matches
-        files by path and compares their digests.
+        This compares local files against the model signing manifest extracted
+        from the signature bundle. For ORAS-style artifacts where layers have
+        file path annotations (org.opencontainers.image.title), it matches
+        files by path and compares their SHA256 digests.
 
         Args:
-            model_path: Path to local model directory
-            expected_manifest: Manifest extracted from signature (contains
-                layer digests)
+            model_path: Path to local model directory containing files to verify
+            expected_manifest: The model signing manifest extracted from the
+                signature bundle, containing expected file paths and digests
+            ignore_git_paths: Whether to ignore git-related files when checking
+                for extra files (default True)
 
         Raises:
-            ValueError: If local files don't match the OCI layer digests
+            ValueError: If local files don't match the expected digests
         """
         model_path = pathlib.Path(model_path)
 
@@ -155,8 +238,6 @@ class Config:
 
         for rd in expected_manifest.resource_descriptors():
             identifier = str(rd.identifier)
-            if identifier == "config.json":
-                continue
             is_generic_layer = identifier.startswith(
                 "layer_"
             ) and identifier.endswith(".tar.gz")
@@ -165,9 +246,8 @@ class Config:
                 expected_file_digests[identifier] = rd.digest
 
         if has_file_paths:
-            # ORAS-style: verify by matching individual files by path
             return self._verify_oci_files_by_path(
-                model_path, expected_file_digests
+                model_path, expected_file_digests, ignore_git_paths
             )
         else:
             print(
@@ -178,20 +258,30 @@ class Config:
             )
             sys.exit(1)
 
+    def _is_git_path(self, rel_path_str: str) -> bool:
+        """Check if a path is git-related."""
+        parts = pathlib.PurePosixPath(rel_path_str).parts
+        return any(p in self._GIT_PATHS or p.startswith(".git") for p in parts)
+
     def _verify_oci_files_by_path(
         self,
         model_path: pathlib.Path,
         expected_file_digests: dict[str, _hashing.Digest],
+        ignore_git_paths: bool = True,
     ):
-        """Verify OCI files by matching paths and computing file digests."""
-        import hashlib
-
+        """Verify local files match expected digests from signature bundle."""
         missing_files = []
         mismatched_files = []
+        extra_files = []
         verified_files = []
 
-        for file_path_str, expected_digest in expected_file_digests.items():
-            local_file_path = model_path / file_path_str
+        normalized_digests = {
+            p.replace("\\", "/"): d for p, d in expected_file_digests.items()
+        }
+
+        for file_path_str, expected_digest in normalized_digests.items():
+            path_parts = pathlib.PurePosixPath(file_path_str).parts
+            local_file_path = model_path.joinpath(*path_parts)
 
             if not local_file_path.exists():
                 missing_files.append(file_path_str)
@@ -216,98 +306,181 @@ class Config:
                     )
                 )
 
-        if missing_files or mismatched_files:
-            error_parts = []
-            if missing_files:
-                missing_list = ", ".join(missing_files[:5])
-                more_text = (
-                    f" ... and {len(missing_files) - 5} more"
-                    if len(missing_files) > 5
-                    else ""
-                )
-                error_parts.append(
-                    f"Missing files ({len(missing_files)}): "
-                    f"{missing_list}{more_text}"
-                )
-            if mismatched_files:
-                mismatches = []
-                for path, expected, actual in mismatched_files[:3]:
-                    mismatches.append(
-                        f"  {path}: expected {expected[:16]}..., "
-                        f"got {actual[:16]}..."
-                    )
-                mismatch_text = "\n".join(mismatches)
-                more_mismatches = (
-                    f"\n  ... and {len(mismatched_files) - 3} more"
-                    if len(mismatched_files) > 3
-                    else ""
-                )
-                error_parts.append(
-                    f"Hash mismatches ({len(mismatched_files)}):\n"
-                    f"{mismatch_text}{more_mismatches}"
-                )
+        expected_paths = set(normalized_digests.keys())
+        for local_file in model_path.rglob("*"):
+            if not local_file.is_file():
+                continue
+            rel_path = local_file.relative_to(model_path)
+            rel_path_str = str(rel_path).replace("\\", "/")
 
-            error_msg = (
-                "Verification failed:\n"
-                + "\n".join(error_parts)
-                + "\n\n"
-                + f"Successfully verified {len(verified_files)} file(s)."
+            if ignore_git_paths and self._is_git_path(rel_path_str):
+                continue
+
+            if rel_path_str not in expected_paths:
+                extra_files.append(rel_path_str)
+
+        if missing_files or mismatched_files or extra_files:
+            raise ValueError(
+                _format_verification_error(
+                    missing=missing_files,
+                    extra=sorted(extra_files),
+                    mismatched=mismatched_files,
+                )
             )
-            raise ValueError(error_msg)
 
-        return
-
-    def verify_from_oci_manifest(
+    def verify_image(
         self,
-        oci_manifest: dict,
-        signature_path: hashing.PathLike,
-        *,
-        include_config: bool = True,
-    ):
-        """Verifies that an OCI image manifest conforms to a signature.
+        image_ref: str | oci_registry.ImageReference,
+        local_model_path: hashing.PathLike | None = None,
+        attachment_mode: str | None = None,
+        ignore_git_paths: bool = True,
+    ) -> None:
+        """Verify an OCI image signature from the registry.
 
-        This method verifies a signature against an OCI image manifest without
-        requiring the actual model files. It extracts the expected manifest from
-        the signature and compares it with a manifest created from the OCI image
-        manifest.
+        Verification performs the following steps:
+
+        1. Fetch the signature bundle from the registry (attached to the image
+           via tag or referrers API)
+        2. Cryptographically verify the signature bundle and extract the
+           expected model signing manifest (list of file/layer digests)
+        3. Fetch the OCI image manifest from the registry (the actual artifact)
+        4. Convert the OCI image manifest layers into a model signing manifest
+        5. Compare the expected vs actual model signing manifests
+        6. Optionally verify local files match the signed digests
+
+        Note:
+            OCI image verification currently supports Sigstore and elliptic key
+            verification only. Use `use_sigstore_verifier()` or
+            `use_elliptic_key_verifier()` before calling this method.
+            Certificate-based verification is not yet supported for images.
 
         Args:
-            oci_manifest: The OCI image manifest as a dictionary (from JSON).
-              Expected to have "layers" array with "digest" fields,
-              and optionally a "config" field with a "digest".
-            signature_path: The path to the signature file.
-            include_config: Whether to include the config blob digest in the
-              comparison. Should match the value used during signing.
-              Default is True.
+            image_ref: OCI image reference as a string (e.g.,
+              "quay.io/user/model:latest") or a parsed ImageReference object.
+            local_model_path: Optional path to local model files. If provided,
+              verification will also check that local files match the signed
+              layer digests (for ORAS-style images with file path annotations).
+            attachment_mode: Optional attachment mode to use for fetching the
+              signature. If None (default), tries both referrers and tag-based.
+              Use "tag" to force tag-based fetching when multiple signatures
+              exist (e.g., when verifying key-based signatures alongside
+              Sigstore signatures).
+            ignore_git_paths: Whether to ignore git-related files (.git/,
+              .gitattributes, .gitignore, .github/) when checking for extra
+              files in local_model_path. Default is True.
 
         Raises:
-            ValueError: No verifier has been configured,
-            the OCI manifest is invalid, or verification
-            fails.
+            ValueError: If no verifier configured, signature not found, or
+              verification fails.
         """
         if self._verifier is None:
             raise ValueError("Attempting to verify with no configured verifier")
 
-        if self._uses_sigstore:
-            signature = sigstore.Signature.read(pathlib.Path(signature_path))
+        if isinstance(image_ref, oci_registry.ImageReference):
+            parsed_ref = image_ref
         else:
-            signature = sigstore_pb.Signature.read(pathlib.Path(signature_path))
+            parsed_ref = oci_registry.ImageReference.parse(image_ref)
+
+        client = oci_registry.OrasClient()
+
+        image_digest = client.resolve_digest(parsed_ref)
+        sig_type = "sigstore" if self._uses_sigstore else "key"
+
+        if attachment_mode == "tag":
+            tag_strategy = oci_attachment.TagAttachment()
+            signature_bytes = tag_strategy.fetch(
+                client, parsed_ref, image_digest, sig_type
+            )
+            if signature_bytes is None:
+                raise ValueError(
+                    f"No tag-based signature found for image {image_ref}. "
+                    "Ensure the image was signed with --attachment-mode tag."
+                )
+        elif attachment_mode == "referrers":
+            ref_strategy = oci_attachment.ReferrersAttachment()
+            signature_bytes = ref_strategy.fetch(
+                client, parsed_ref, image_digest, sig_type
+            )
+            if signature_bytes is None:
+                raise ValueError(
+                    f"No referrers-based signature for image {image_ref}. "
+                    "Ensure the image was signed with referrers attachment."
+                )
+        else:
+            result = oci_attachment.try_fetch_signature(
+                client, parsed_ref, image_digest, sig_type
+            )
+            if result is None:
+                raise ValueError(
+                    f"No signature found for image {image_ref}. "
+                    "Ensure the image has been signed and the signature is "
+                    "attached to the registry."
+                )
+            signature_bytes, _ = result
+
+        try:
+            signature_json = signature_bytes.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError(
+                f"Failed to decode signature for image {image_ref}: "
+                f"signature data is not valid UTF-8. {e}"
+            ) from e
+
+        if self._uses_sigstore:
+            from sigstore import models as sigstore_models
+
+            try:
+                bundle = sigstore_models.Bundle.from_json(signature_json)
+                signature = sigstore.Signature(bundle)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Failed to parse Sigstore signature for {image_ref}: "
+                    f"invalid JSON. {e}"
+                ) from e
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to decode Sigstore signature for {image_ref}: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
+        else:
+            from sigstore_models.bundle import v1 as bundle_pb
+
+            try:
+                parsed_dict = json.loads(signature_json)
+                signature = sigstore_pb.Signature(
+                    bundle_pb.Bundle.from_dict(parsed_dict)
+                )
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Failed to parse signature for image {image_ref}: "
+                    f"invalid JSON. {e}"
+                ) from e
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to decode signature for image {image_ref}: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
 
         expected_manifest = self._verifier.verify(signature)
 
+        ref_with_digest = parsed_ref.with_digest(image_digest)
+        oci_manifest, _ = client.get_manifest(ref_with_digest)
+
         actual_manifest = hashing.create_manifest_from_oci_layers(
-            oci_manifest, include_config=include_config
+            oci_manifest, model_name=str(parsed_ref)
         )
 
         if actual_manifest != expected_manifest:
-            diff_message = self._get_manifest_diff(
-                actual_manifest, expected_manifest
+            raise ValueError(
+                self._get_manifest_diff(actual_manifest, expected_manifest)
             )
-            raise ValueError(f"Signature mismatch: {diff_message}")
 
-    def _get_manifest_diff(self, actual, expected) -> list[str]:
-        diffs = []
+        if local_model_path is not None:
+            self._verify_oci_layers_from_files(
+                local_model_path, expected_manifest, ignore_git_paths
+            )
 
+    def _get_manifest_diff(self, actual, expected) -> str:
         actual_hashes = {
             rd.identifier: rd.digest for rd in actual.resource_descriptors()
         }
@@ -315,33 +488,29 @@ class Config:
             rd.identifier: rd.digest for rd in expected.resource_descriptors()
         }
 
-        extra_actual_files = set(actual_hashes.keys()) - set(
-            expected_hashes.keys()
+        extra = sorted(set(actual_hashes.keys()) - set(expected_hashes.keys()))
+        missing = sorted(
+            set(expected_hashes.keys()) - set(actual_hashes.keys())
         )
-        if extra_actual_files:
-            diffs.append(
-                f"Extra files found in model '{actual.model_name}': "
-                f"{', '.join(sorted(extra_actual_files))}"
-            )
 
-        missing_actual_files = set(expected_hashes.keys()) - set(
-            actual_hashes.keys()
-        )
-        if missing_actual_files:
-            diffs.append(
-                f"Missing files in model '{actual.model_name}': "
-                f"{', '.join(sorted(missing_actual_files))}"
-            )
-
-        common_files = set(actual_hashes.keys()) & set(expected_hashes.keys())
-        for identifier in sorted(common_files):
+        mismatched = []
+        for identifier in sorted(
+            set(actual_hashes.keys()) & set(expected_hashes.keys())
+        ):
             if actual_hashes[identifier] != expected_hashes[identifier]:
-                diffs.append(
-                    f"Hash mismatch for '{identifier}': "
-                    f"Expected '{expected_hashes[identifier]}', "
-                    f"Actual '{actual_hashes[identifier]}'"
+                mismatched.append(
+                    (
+                        str(identifier),
+                        str(expected_hashes[identifier]),
+                        str(actual_hashes[identifier]),
+                    )
                 )
-        return diffs
+
+        return _format_verification_error(
+            missing=[str(m) for m in missing],
+            extra=[str(e) for e in extra],
+            mismatched=mismatched,
+        )
 
     def set_hashing_config(self, hashing_config: hashing.Config) -> Self:
         """Sets the new configuration for hashing models.

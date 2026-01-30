@@ -39,15 +39,71 @@ for model in all_models:
     signing_config.sign(model, f"{model}_sharded.sig")
 ```
 
+## OCI Image Signing
+
+The module supports signing OCI container images directly in registries.
+
+**Note:** OCI image signing currently supports Sigstore and elliptic key signing
+only. Certificate-based and PKCS#11 signing are not yet supported for images.
+
+```python
+# Sign an image with Sigstore (opens OIDC browser flow)
+sig_digest = (
+    model_signing.signing.Config()
+    .use_sigstore_signer()
+    .sign_image("quay.io/user/model:latest")
+)
+
+# Sign with a private key
+sig_digest = (
+    model_signing.signing.Config()
+    .use_elliptic_key_signer(private_key="key.pem")
+    .sign_image("quay.io/user/model:latest")
+)
+
+# Use tag-based attachment for registries without OCI 1.1 Referrers API
+sig_digest = (
+    model_signing.signing.Config()
+    .use_sigstore_signer()
+    .sign_image("quay.io/user/model:latest", attachment_mode="tag")
+)
+
+# Write signature to file instead of attaching to registry
+model_signing.signing.Config().use_sigstore_signer().sign_image(
+    "quay.io/user/model:latest",
+    signature_path=pathlib.Path("model.sig"),
+    attach=False,
+)
+
+# Attach to registry AND write signature to file
+sig_digest = (
+    model_signing.signing.Config()
+    .use_sigstore_signer()
+    .sign_image(
+        "quay.io/user/model:latest",
+        signature_path=pathlib.Path("model.sig"),
+        attach=True,
+    )
+)
+```
+
+Registry authentication uses existing Docker/Podman credentials from
+`~/.docker/config.json` or `${XDG_RUNTIME_DIR}/containers/auth.json`.
+
 The API defined here is stable and backwards compatible.
 """
 
 from collections.abc import Iterable
+import json
 import pathlib
 import sys
 
+import requests
+
 from model_signing import hashing
 from model_signing import manifest
+from model_signing._oci import attachment as oci_attachment
+from model_signing._oci import registry as oci_registry
 from model_signing._signing import sign_certificate as certificate
 from model_signing._signing import sign_ec_key as ec_key
 from model_signing._signing import sign_sigstore as sigstore
@@ -130,6 +186,158 @@ class Config:
         payload = signing.Payload(model_manifest)
         signature = self._signer.sign(payload)
         signature.write(pathlib.Path(signature_path))
+
+    def sign_image(
+        self,
+        image_ref: str | oci_registry.ImageReference,
+        attachment_mode: str = "referrers",
+        signature_path: pathlib.Path | None = None,
+        attach: bool = True,
+    ) -> str | None:
+        """Sign an OCI image with flexible output options.
+
+        Signing performs the following steps:
+
+        1. Fetch the OCI image manifest from the registry (the artifact
+           descriptor containing layer references and digests)
+        2. Convert it into a model signing manifest (our internal format
+           mapping file paths to their SHA256 digests)
+        3. Sign the model signing manifest, producing a signature bundle
+        4. Optionally write the signature bundle to disk
+        5. Optionally attach the signature bundle to the registry
+
+        Note:
+            OCI image signing currently supports Sigstore and elliptic key
+            signing only. Use `use_sigstore_signer()` or
+            `use_elliptic_key_signer()` before calling this method.
+            Certificate-based and PKCS#11 signing are not yet supported.
+
+        Args:
+            image_ref: OCI image reference as a string (e.g.,
+              "quay.io/user/model:latest") or a parsed ImageReference object.
+            attachment_mode: How to attach the signature to the registry.
+              - "referrers" (default): Uses OCI 1.1 Referrers API. Falls back
+                to tag-based if the registry doesn't support OCI 1.1 artifacts.
+              - "tag": Uses tag-based attachment (sha256-DIGEST.sig)
+            signature_path: Optional path to write the signature bundle to disk.
+              If provided, the signature will be written to this file.
+            attach: Whether to attach the signature to the registry. Default is
+              True. If False, signature_path must be provided.
+
+        Returns:
+            The digest of the attached signature artifact if attach=True,
+            otherwise None.
+
+        Raises:
+            ValueError: If the image reference is invalid, attachment fails,
+              or attach=False without signature_path.
+        """
+        if not self._signer:
+            raise ValueError(
+                "No signer configured. Call use_sigstore_signer(), "
+                "use_elliptic_key_signer(), or another signer method first."
+            )
+
+        if not attach and signature_path is None:
+            raise ValueError(
+                "Must specify signature_path when attach=False. "
+                "Either set attach=True to attach to registry, "
+                "or provide signature_path to write to disk."
+            )
+
+        if isinstance(image_ref, oci_registry.ImageReference):
+            parsed_ref = image_ref
+        else:
+            try:
+                parsed_ref = oci_registry.ImageReference.parse(image_ref)
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid image reference '{image_ref}': {e}"
+                ) from e
+
+        client = oci_registry.OrasClient()
+
+        try:
+            oci_manifest, image_digest = client.get_manifest(parsed_ref)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                raise ValueError(
+                    f"Authentication failed for image '{image_ref}'. "
+                    "Check your registry credentials in ~/.docker/config.json "
+                    "or ${XDG_RUNTIME_DIR}/containers/auth.json."
+                ) from e
+            elif e.response is not None and e.response.status_code == 404:
+                raise ValueError(
+                    f"Image not found: '{image_ref}'. "
+                    "Verify the image exists and you have access."
+                ) from e
+            raise ValueError(
+                f"Failed to fetch manifest for '{image_ref}': {e}"
+            ) from e
+
+        manifest_size = len(json.dumps(oci_manifest, separators=(",", ":")))
+
+        model_manifest = hashing.create_manifest_from_oci_layers(
+            oci_manifest, model_name=str(parsed_ref)
+        )
+
+        payload = signing.Payload(model_manifest)
+        signature = self._signer.sign(payload)
+
+        signature_bytes = signature.bundle.to_json().encode("utf-8")
+
+        if signature_path is not None:
+            signature_path.parent.mkdir(parents=True, exist_ok=True)
+            signature_path.write_bytes(signature_bytes)
+
+        if not attach:
+            return None
+
+        match attachment_mode.lower():
+            case "referrers":
+                mode = oci_attachment.AttachmentMode.REFERRERS
+            case "tag":
+                mode = oci_attachment.AttachmentMode.TAG
+            case _:
+                raise ValueError(
+                    f"Invalid attachment mode '{attachment_mode}'. "
+                    "Must be 'referrers' or 'tag'."
+                )
+
+        strategy = oci_attachment.get_attachment_strategy(mode)
+
+        try:
+            sig_digest = strategy.attach(
+                client, parsed_ref, signature_bytes, image_digest, manifest_size
+            )
+        except requests.HTTPError as e:
+            if (
+                mode == oci_attachment.AttachmentMode.REFERRERS
+                and e.response is not None
+                and e.response.status_code == 400
+            ):
+                # Registry doesn't support OCI 1.1 artifacts, fall back to tags
+                fallback = oci_attachment.get_attachment_strategy(
+                    oci_attachment.AttachmentMode.TAG
+                )
+                sig_digest = fallback.attach(
+                    client,
+                    parsed_ref,
+                    signature_bytes,
+                    image_digest,
+                    manifest_size,
+                )
+            elif e.response is not None and e.response.status_code == 401:
+                raise ValueError(
+                    f"Authentication failed when attaching signature to "
+                    f"'{image_ref}'. Check your registry credentials."
+                ) from e
+            else:
+                raise ValueError(
+                    f"Failed to attach signature to '{image_ref}': {e}"
+                ) from e
+
+        return sig_digest
 
     def set_hashing_config(self, hashing_config: hashing.Config) -> Self:
         """Sets the new configuration for hashing models.
