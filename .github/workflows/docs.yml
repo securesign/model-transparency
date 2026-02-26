@@ -16,7 +16,7 @@ name: Documentation
 
 on:
   push:
-    branches: [main]
+    branches: [tech-preview]
     # TODO: determine if we only want to build for tags.
     # tags:
     #   - '*'

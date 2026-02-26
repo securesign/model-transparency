@@ -16,7 +16,7 @@ name: Lint
 
 on:
   pull_request:
-    branches: [main]
+    branches: [tech-preview]
     types: [opened, synchronize]
 
 permissions: {}
