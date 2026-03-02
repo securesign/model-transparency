@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-02
+
+### Added
+- Added `--instance` option for signing and verification using TUF-based trust bootstrapping. Use `model_signing trust-instance root.json --instance URL` to bootstrap, then `--instance URL` on sign/verify commands.
+- Added support for `oci://` prefix in image references (e.g., `oci://quay.io/user/model:latest`).
+- Added support for ModelCar format OCI images with OLOT annotations. Original file hashes are extracted from `olot.layer.content.digest` annotations for interoperable signing.
+- Added support for verifying OCI images using a local signature file (`--signature`) instead of fetching from registry referrers API.
+
+### Changed
+- Updated `sigstore` dependency to `>=4.2` for TUF-based instance support.
+
 ## [0.0.3] - 2026-01-12
 
 Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](https://github.com/sigstore/model-transparency) v1.1.1.
@@ -98,7 +109,8 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
 - [Demo notebook](https://colab.sandbox.google.com/drive/18IB_uipduXYq0ohMxJv2xHfeihLIcGMT) to showcase API and CLI examples.
 
 
-[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/securesign/model-transparency/compare/v0.0.3...v0.1.0
 [0.0.3]: https://github.com/securesign/model-transparency/releases/tag/v0.0.3
 
 <!-- Upstream changelog references -->
