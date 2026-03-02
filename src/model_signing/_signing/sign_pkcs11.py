@@ -225,6 +225,7 @@ class CertSigner(Signer):
             signing_certificate_path: The path to the signing certificate.
             certificate_chain_paths: Paths to other certificates used to
               establish chain of trust.
+            module_paths: Paths to PKCS #11 modules to load.
 
         Raises:
             ValueError: Signing certificate's public key does not match the
@@ -243,16 +244,21 @@ class CertSigner(Signer):
                 "the public key paired with the private key"
             )
 
-        self._trust_chain = x509.load_pem_x509_certificates(
-            b"".join([path.read_bytes() for path in certificate_chain_paths])
+        chain_bytes = b"".join(
+            [path.read_bytes() for path in certificate_chain_paths]
+        )
+        self._trust_chain = (
+            x509.load_pem_x509_certificates(chain_bytes) if chain_bytes else []
         )
 
     @override
     def _get_verification_material(self) -> bundle_pb.VerificationMaterial:
         def _to_protobuf_certificate(certificate):
             return common_pb.X509Certificate(
-                raw_bytes=certificate.public_bytes(
-                    encoding=serialization.Encoding.DER
+                raw_bytes=base64.b64encode(
+                    certificate.public_bytes(
+                        encoding=serialization.Encoding.DER
+                    )
                 )
             )
 
@@ -267,5 +273,6 @@ class CertSigner(Signer):
         return bundle_pb.VerificationMaterial(
             x509_certificate_chain=common_pb.X509CertificateChain(
                 certificates=chain
-            )
+            ),
+            tlog_entries=[],
         )
