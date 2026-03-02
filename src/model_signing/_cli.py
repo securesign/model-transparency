@@ -139,6 +139,17 @@ _trust_config_option = click.option(
     help="The client trust configuration to use",
 )
 
+# Decorator for the commonly used option to specify a Sigstore instance URL.
+_instance_option = click.option(
+    "--instance",
+    type=str,
+    metavar="URL",
+    help=(
+        "Use the Sigstore instance at the given TUF repository URL. "
+        "Must be bootstrapped first via `trust-instance`."
+    ),
+)
+
 # Decorator for the commonly used option to ignore certain paths
 _ignore_paths_option = click.option(
     "--ignore-paths",
@@ -241,7 +252,7 @@ def _detect_path_type(
 
     if path.is_file() and path.suffix.lower() == ".json":
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict) and (
                 "layers" in data or "schemaVersion" in data
@@ -409,6 +420,43 @@ def _digest(
         sys.exit(1)
 
 
+@main.command(name="trust-instance")
+@click.argument("root", type=pathlib.Path, metavar="ROOT_JSON")
+@click.option(
+    "--instance",
+    type=str,
+    metavar="URL",
+    required=True,
+    help="The TUF repository URL of the Sigstore instance.",
+)
+def _trust_instance(root: pathlib.Path, instance: str) -> None:
+    r"""Bootstrap trust for a Sigstore instance.
+
+    Seeds the local TUF metadata cache with ROOT_JSON so that
+    subsequent sign/verify commands can use --instance URL without
+    needing the root file again.
+
+    \b
+    Example:
+        model_signing trust-instance \
+            --instance https://tuf-repo-cdn.sigstore.dev \
+            root.json
+    """
+    from model_signing._signing.sign_sigstore import bootstrap_instance
+
+    if not root.is_file():
+        click.echo(f"Error: ROOT_JSON must be a file: {root}", err=True)
+        sys.exit(1)
+
+    try:
+        bootstrap_instance(instance, root)
+    except Exception as err:
+        click.echo(f"Bootstrapping instance failed: {err}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Trust bootstrapped for {instance}")
+
+
 @main.group(name="sign", subcommand_metavar="PKI_METHOD", cls=_PKICmdGroup)
 def _sign() -> None:
     """Sign models.
@@ -437,6 +485,7 @@ def _sign() -> None:
 @_write_signature_option
 @_sigstore_staging_option
 @_trust_config_option
+@_instance_option
 @click.option(
     "--use-ambient-credentials",
     type=bool,
@@ -486,6 +535,7 @@ def _sign_sigstore(
     client_id: str | None = None,
     client_secret: str | None = None,
     trust_config: pathlib.Path | None = None,
+    instance: str | None = None,
 ) -> None:
     """Sign using Sigstore (DEFAULT signing method).
 
@@ -554,6 +604,7 @@ def _sign_sigstore(
                     client_id=client_id,
                     client_secret=client_secret,
                     trust_config=trust_config,
+                    instance=instance,
                 ).sign_from_manifest(model_manifest, signature)
             else:
                 model_path_obj = path_wrapper
@@ -573,6 +624,7 @@ def _sign_sigstore(
                     client_id=client_id,
                     client_secret=client_secret,
                     trust_config=trust_config,
+                    instance=instance,
                 ).set_hashing_config(
                     model_signing.hashing.Config()
                     .set_ignored_paths(
@@ -945,6 +997,7 @@ def _verify() -> None:
 @_allow_symlinks_option
 @_sigstore_staging_option
 @_trust_config_option
+@_instance_option
 @click.option(
     "--identity",
     type=str,
@@ -971,6 +1024,7 @@ def _verify_sigstore(
     use_staging: bool,
     ignore_unsigned_files: bool,
     trust_config: pathlib.Path | None = None,
+    instance: str | None = None,
 ) -> None:
     """Verify using Sigstore (DEFAULT verification method).
 
@@ -1010,6 +1064,7 @@ def _verify_sigstore(
                     oidc_issuer=identity_provider,
                     use_staging=use_staging,
                     trust_config=trust_config,
+                    instance=instance,
                 ).verify_from_oci_manifest(oci_manifest.data, signature)
             else:
                 model_path_obj = path_wrapper
@@ -1026,6 +1081,7 @@ def _verify_sigstore(
                     oidc_issuer=identity_provider,
                     use_staging=use_staging,
                     trust_config=trust_config,
+                    instance=instance,
                 ).set_hashing_config(
                     model_signing.hashing.Config()
                     .set_ignored_paths(
