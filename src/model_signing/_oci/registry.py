@@ -127,7 +127,14 @@ class ImageReference:
 
     @classmethod
     def parse(cls, reference: str) -> ImageReference:
-        """Parse an image reference string."""
+        """Parse an image reference string.
+
+        Supports optional oci:// prefix (e.g., oci://quay.io/repo/image:tag).
+        """
+        # Strip oci:// prefix if present
+        if reference.startswith("oci://"):
+            reference = reference[6:]
+
         if "/" not in reference:
             raise ValueError(f"Invalid reference '{reference}': missing /")
 

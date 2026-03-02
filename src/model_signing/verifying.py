@@ -334,13 +334,14 @@ class Config:
         local_model_path: hashing.PathLike | None = None,
         attachment_mode: str | None = None,
         ignore_git_paths: bool = True,
+        signature_path: hashing.PathLike | None = None,
     ) -> None:
-        """Verify an OCI image signature from the registry.
+        """Verify an OCI image signature from the registry or a local file.
 
         Verification performs the following steps:
 
         1. Fetch the signature bundle from the registry (attached to the image
-           via tag or referrers API)
+           via tag or referrers API) or load from a local file
         2. Cryptographically verify the signature bundle and extract the
            expected model signing manifest (list of file/layer digests)
         3. Fetch the OCI image manifest from the registry (the actual artifact)
@@ -364,10 +365,15 @@ class Config:
               signature. If None (default), tries both referrers and tag-based.
               Use "tag" to force tag-based fetching when multiple signatures
               exist (e.g., when verifying key-based signatures alongside
-              Sigstore signatures).
+              Sigstore signatures). Ignored when signature_path is provided.
             ignore_git_paths: Whether to ignore git-related files (.git/,
               .gitattributes, .gitignore, .github/) when checking for extra
               files in local_model_path. Default is True.
+            signature_path: Optional path to a local signature file. If
+              provided, the signature is loaded from this file instead of
+              fetching from the registry. This is useful for verifying images
+              in registries where you don't have write access to attach
+              signatures.
 
         Raises:
             ValueError: If no verifier configured, signature not found, or
@@ -386,7 +392,12 @@ class Config:
         image_digest = client.resolve_digest(parsed_ref)
         sig_type = "sigstore" if self._uses_sigstore else "key"
 
-        if attachment_mode == "tag":
+        if signature_path is not None:
+            import pathlib
+
+            sig_file = pathlib.Path(signature_path)
+            signature_bytes = sig_file.read_bytes()
+        elif attachment_mode == "tag":
             tag_strategy = oci_attachment.TagAttachment()
             signature_bytes = tag_strategy.fetch(
                 client, parsed_ref, image_digest, sig_type

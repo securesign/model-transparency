@@ -975,20 +975,29 @@ def _verify_sigstore(
             else:
                 image_ref = ImageReference.parse(target)
                 click.echo(f"Verifying: {image_ref}")
-                use_default = attachment_mode == "referrers"
-                mode = None if use_default else attachment_mode
-                if mode == "tag":
-                    click.echo("Fetching signature from tag...")
-                elif mode is None:
-                    click.echo("Fetching signature from registry...")
+                if signature is not None:
+                    click.echo(f"Signature: {signature}")
+                    config.verify_image(
+                        image_ref,
+                        local_model_path=local_model,
+                        ignore_git_paths=ignore_git_paths,
+                        signature_path=signature,
+                    )
                 else:
-                    click.echo("Fetching signature via referrers API...")
-                config.verify_image(
-                    image_ref,
-                    local_model_path=local_model,
-                    attachment_mode=mode,
-                    ignore_git_paths=ignore_git_paths,
-                )
+                    use_default = attachment_mode == "referrers"
+                    mode = None if use_default else attachment_mode
+                    if mode == "tag":
+                        click.echo("Fetching signature from tag...")
+                    elif mode is None:
+                        click.echo("Fetching signature from registry...")
+                    else:
+                        click.echo("Fetching signature via referrers API...")
+                    config.verify_image(
+                        image_ref,
+                        local_model_path=local_model,
+                        attachment_mode=mode,
+                        ignore_git_paths=ignore_git_paths,
+                    )
                 if local_model:
                     click.echo(f"Local files verified: {local_model}")
 
@@ -1080,20 +1089,29 @@ def _verify_key(
             else:
                 image_ref = ImageReference.parse(target)
                 click.echo(f"Verifying: {image_ref}")
-                use_default = attachment_mode == "referrers"
-                mode = None if use_default else attachment_mode
-                if mode == "tag":
-                    click.echo("Fetching signature from tag...")
-                elif mode is None:
-                    click.echo("Fetching signature from registry...")
+                if signature is not None:
+                    click.echo(f"Signature: {signature}")
+                    config.verify_image(
+                        image_ref,
+                        local_model_path=local_model,
+                        ignore_git_paths=ignore_git_paths,
+                        signature_path=signature,
+                    )
                 else:
-                    click.echo("Fetching signature via referrers API...")
-                config.verify_image(
-                    image_ref,
-                    local_model_path=local_model,
-                    attachment_mode=mode,
-                    ignore_git_paths=ignore_git_paths,
-                )
+                    use_default = attachment_mode == "referrers"
+                    mode = None if use_default else attachment_mode
+                    if mode == "tag":
+                        click.echo("Fetching signature from tag...")
+                    elif mode is None:
+                        click.echo("Fetching signature from registry...")
+                    else:
+                        click.echo("Fetching signature via referrers API...")
+                    config.verify_image(
+                        image_ref,
+                        local_model_path=local_model,
+                        attachment_mode=mode,
+                        ignore_git_paths=ignore_git_paths,
+                    )
                 if local_model:
                     click.echo(f"Local files verified: {local_model}")
 

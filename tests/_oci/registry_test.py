@@ -52,6 +52,20 @@ class TestImageReference:
         assert ref.repository == "mymodel"
         assert ref.tag == "test"
 
+    def test_parse_with_oci_prefix(self):
+        ref = ImageReference.parse("oci://quay.io/user/model:latest")
+        assert ref.registry == "quay.io"
+        assert ref.repository == "user/model"
+        assert ref.tag == "latest"
+        assert ref.digest is None
+
+    def test_parse_with_oci_prefix_and_digest(self):
+        digest = "sha256:" + "b" * 64
+        ref = ImageReference.parse(f"oci://ghcr.io/org/model@{digest}")
+        assert ref.registry == "ghcr.io"
+        assert ref.repository == "org/model"
+        assert ref.digest == digest
+
     def test_parse_requires_slash(self):
         with pytest.raises(ValueError, match="missing /"):
             ImageReference.parse("ubuntu:latest")
