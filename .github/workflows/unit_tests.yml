@@ -15,7 +15,7 @@
 name: Run unit tests
 on:
   pull_request:
-    branches: [main]
+    branches: [tech-preview]
     types: [opened, synchronize]
 
 permissions: {}
