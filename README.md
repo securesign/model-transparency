@@ -84,7 +84,9 @@ repository can do the same using [Hatch](https://hatch.pypa.io/latest/) via
 
 For the remainder of the section, we would use `model_signing <args>` method.
 
-The CLI has two subcommands: `sign` for signing and `verify` for verification.
+The CLI has three subcommands: `sign` for signing, `verify` for verification,
+and `trust-instance` for bootstrapping trust to a Sigstore instance (see
+[Using Private Sigstore Instances](#using-private-sigstore-instances)).
 Each subcommand has another level of subcommands to select the signing method
 (`sigstore` -- the default, can be skipped --, `key`, `certificate`). Then, each
 of these subcommands has several flags to configure parameters for
@@ -127,29 +129,57 @@ The digest subcommand follows the same ignore rules used when signing.
 
 ## Using Private Sigstore Instances
 
-To use a private Sigstore setup (e.g. custom Rekor/Fulcio), use the `--trust-config` flag:
+> **Note:** If you are signing and verifying with the default public
+> [Sigstore](https://www.sigstore.dev/) instance, you do not need any of the
+> options below — the CLI uses the public goods instance out of the box. This
+> section is only relevant when operating your own private Sigstore deployment.
+
+The recommended way to use a private Sigstore instance is via `--instance`,
+which resolves trust configuration automatically through
+[TUF](https://theupdateframework.io/).
+
+**1. Bootstrap trust** (one-time setup):
+
+Fetch the instance's initial `root.json` and register it locally:
 
 ```bash
-[...]$ model_signing sign bert-base-uncased --trust-config client_trust_config.json
+[...]$ curl -o root.json https://tuf-repo-cdn.sigstore.dev/1.root.json
+[...]$ model_signing trust-instance --instance https://tuf-repo-cdn.sigstore.dev root.json
 ```
 
-For verification:
+**2. Sign and verify** using the instance URL:
 
 ```bash
-[...]$ model_signing verify bert-base-uncased \
+[...]$ model_signing sign --instance https://tuf-repo-cdn.sigstore.dev bert-base-uncased
+[...]$ model_signing verify --instance https://tuf-repo-cdn.sigstore.dev \
       --signature model.sig \
-      --trust-config client_trust_config.json
-      --identity "$identity"
-      --identity-provider "$oidc_provider"
+      --identity "$identity" \
+      --identity-provider "$oidc_provider" \
+      bert-base-uncased
 ```
 
-The `client_trust_config.json` file should include:
+After bootstrapping, only the URL is needed — TUF handles metadata updates and
+key rotation transparently.
 
-- A signed target trust root
-- A `signingConfig` section with your private Rekor, Fulcio, and CT log endpoints
-- Public keys for verification (if applicable)
+#### Using a manual ClientTrustConfig
 
-You can find an example `client_trust_config.json` that references the public Sigstore production services in the Sigstore Python repository [here](https://github.com/sigstore/sigstore-python/blob/main/test/assets/trust_config/config.v1.json).
+If you need full control over the trust root (e.g. pinning specific keys or
+endpoints), you can provide a `ClientTrustConfig` JSON file directly via
+`--trust-config`. This takes precedence over `--instance` when both are given.
+
+```bash
+[...]$ model_signing sign --trust-config client_trust_config.json bert-base-uncased
+[...]$ model_signing verify \
+      --trust-config client_trust_config.json \
+      --signature model.sig \
+      --identity "$identity" \
+      --identity-provider "$oidc_provider" \
+      bert-base-uncased
+```
+
+An example `client_trust_config.json` referencing the public Sigstore production
+services can be found in the sigstore-python repository
+[here](https://github.com/sigstore/sigstore-python/blob/main/test/assets/trust_config/config.v1.json).
 
 As another example, here is how we can sign with private keys. First, we
 generate the key pair:
@@ -215,66 +245,84 @@ Similarly, for key verification, we can use
 
 #### Signing and Verifying OCI Images
 
-The tool supports signing and verifying OCI model images directly from their manifest without requiring the model files on disk. This is useful for signing images in registries without pulling them.
-
-**Signing from OCI Manifest:**
+The tool supports signing and verifying OCI container images directly from
+registries. Signatures are automatically attached to the registry.
 
 ```bash
-# Get the OCI manifest (from skopeo inspect --raw)
-[...]$ skopeo inspect --raw docker://quay.io/user/model:latest > manifest.json
+# Sign with Sigstore
+[...]$ model_signing sign sigstore quay.io/user/model:latest
 
-# Sign using the manifest
-[...]$ model_signing sign manifest.json
+# Sign with EC key
+[...]$ model_signing sign key quay.io/user/model:latest --private-key key.pem
 ```
 
-**Verifying OCI Images:**
+Registry authentication uses your existing credentials from `~/.docker/config.json`
+or podman's `auth.json`.
 
-You can verify in two ways:
+By default, signatures are attached using the OCI 1.1 Referrers API. For older
+registries, use `--attachment-mode tag`:
 
-1. **Against the OCI manifest** (no files needed):
 ```bash
-[...]$ model_signing verify manifest.json \
-  --signature model.sig \
+[...]$ model_signing sign sigstore quay.io/user/model:latest --attachment-mode tag
+```
+
+Use `--output-mode` to control where signatures are written:
+
+```bash
+# Write signature to file only (no registry attachment)
+[...]$ model_signing sign sigstore quay.io/user/model:latest \
+  --output-mode file --signature model.sig
+
+# Attach to registry AND write to file
+[...]$ model_signing sign sigstore quay.io/user/model:latest \
+  --output-mode both --signature model.sig
+```
+
+To verify:
+
+```bash
+# Verify Sigstore signature
+[...]$ model_signing verify sigstore quay.io/user/model:latest \
   --identity user@example.com \
-  --identity_provider https://accounts.google.com
+  --identity-provider https://accounts.google.com
+
+# Verify key-based signature
+[...]$ model_signing verify key quay.io/user/model:latest --public-key key.pub
 ```
 
-2. **Against local model files** (automatically detects OCI layer signatures):
+You can also verify that local files match a signed image:
+
 ```bash
-[...]$ model_signing verify model_dir \
-  --signature model.sig \
+[...]$ model_signing verify sigstore quay.io/user/model:latest \
   --identity user@example.com \
-  --identity_provider https://accounts.google.com
+  --identity-provider https://accounts.google.com \
+  --local-model ./downloaded-model
 ```
 
-The tool automatically detects OCI manifest signatures and matches files by path using `org.opencontainers.image.title` annotations (ORAS-style). For multi-layer images, verification against local files attempts to match individual files by path.
+The tool auto-detects the target type: if the path exists locally, it is treated
+as a file; otherwise, it is treated as an OCI image reference.
 
-**Python API:**
+##### Python API
 
 ```python
-import json
-from model_signing import hashing, signing, verifying
+import model_signing
 
-# Sign from OCI manifest
-with open("manifest.json") as f:
-    oci_data = json.load(f)
-
-manifest = hashing.create_manifest_from_oci_layers(oci_data)
-signing.Config().use_sigstore_signer().sign_from_manifest(
-    manifest, "model.sig"
+# Sign an image
+model_signing.signing.Config().use_sigstore_signer().sign_image(
+    "quay.io/user/model:latest"
 )
 
-# Verify from OCI manifest
-verifying.Config().use_sigstore_verifier(
+# Verify an image
+model_signing.verifying.Config().use_sigstore_verifier(
     identity="user@example.com",
     oidc_issuer="https://accounts.google.com"
-).verify_from_oci_manifest(oci_data, "model.sig")
+).verify_image("quay.io/user/model:latest")
 
-# Or verify from local files (automatically handles OCI signatures)
-verifying.Config().use_sigstore_verifier(
+# Verify image and check local files match
+model_signing.verifying.Config().use_sigstore_verifier(
     identity="user@example.com",
     oidc_issuer="https://accounts.google.com"
-).verify("model_dir", "model.sig")
+).verify_image("quay.io/user/model:latest", local_model_path="./model_dir")
 ```
 
 #### Signing with PKCS #11 URIs
@@ -446,12 +494,27 @@ model_signing.verifying.Config().use_sigstore_verifier(
 ).verify("finbert", "finbert.sig")
 ```
 
+To sign or verify against a specific Sigstore instance, pass its TUF URL:
+
+```python
+import model_signing
+
+model_signing.signing.Config().use_sigstore_signer(
+    instance="https://tuf-repo-cdn.sigstore.dev"
+).sign("finbert", "finbert.sig")
+
+model_signing.verifying.Config().use_sigstore_verifier(
+    identity=identity, oidc_issuer=oidc_provider,
+    instance="https://tuf-repo-cdn.sigstore.dev"
+).verify("finbert", "finbert.sig")
+```
+
 The same verification configuration can be used to verify multiple models:
 
 ```python
 import model_signing
 
-verifying_config = model_signing.signing.Config().use_elliptic_key_verifier(
+verifying_config = model_signing.verifying.Config().use_elliptic_key_verifier(
     public_key="key.pub"
 )
 

@@ -38,6 +38,40 @@ _DEFAULT_CLIENT_ID = "sigstore"
 _DEFAULT_CLIENT_SECRET = ""
 
 
+def _resolve_trust_config(
+    *,
+    use_staging: bool = False,
+    trust_config: pathlib.Path | None = None,
+    instance: str | None = None,
+) -> sigstore_models.ClientTrustConfig:
+    """Resolve trust configuration from the provided options.
+
+    Precedence: trust_config file > instance URL > staging > production.
+    """
+    if trust_config:
+        return sigstore_models.ClientTrustConfig.from_json(
+            trust_config.read_text()
+        )
+    if instance:
+        return sigstore_models.ClientTrustConfig.from_tuf(instance)
+    if use_staging:
+        return sigstore_models.ClientTrustConfig.staging()
+    return sigstore_models.ClientTrustConfig.production()
+
+
+def bootstrap_instance(instance: str, root: pathlib.Path) -> None:
+    """Bootstrap trust for a Sigstore instance.
+
+    Seeds the local TUF cache with the provided root metadata so that
+    subsequent signing/verification can use ``--instance`` with just the URL.
+
+    Args:
+        instance: The TUF repository URL of the Sigstore instance.
+        root: Path to the initial TUF ``root.json`` for the instance.
+    """
+    sigstore_models.ClientTrustConfig.from_tuf(instance, bootstrap_root=root)
+
+
 class Signature(signing.Signature):
     """Sigstore signature support, wrapping around `sigstore_models.Bundle`."""
 
@@ -74,6 +108,7 @@ class Signer(signing.Signer):
         client_id: str | None = None,
         client_secret: str | None = None,
         trust_config: pathlib.Path | None = None,
+        instance: str | None = None,
     ):
         """Initializes Sigstore signers.
 
@@ -97,7 +132,7 @@ class Signer(signing.Signer):
               opened automatically if possible.
             identity_token: An explicit identity token to use when signing,
               taking precedence over any ambient credential or OAuth workflow.
-             client_id: An optional client ID to use when performing OIDC-based
+            client_id: An optional client ID to use when performing OIDC-based
               authentication. This is typically used to identify the
               application making the request to the OIDC provider. If not
               provided, the default client ID configured by Sigstore will be
@@ -113,22 +148,22 @@ class Signer(signing.Signer):
               supplied PKI and trust configurations, instead of the default
               Sigstore setup. If not specified, the default Sigstore
               configuration is used.
+            instance: A Sigstore TUF repository URL. When provided, trust
+              configuration is fetched via TUF from this URL instead of using
+              the default production instance or a manual config file. Must
+              have been bootstrapped first via `bootstrap_instance()`.
         """
-        # Initializes the signing and issuer contexts based on provided
-        # configuration.
-        if use_staging:
-            trust_config = sigstore_models.ClientTrustConfig.staging()
-        elif trust_config:
-            trust_config = sigstore_models.ClientTrustConfig.from_json(
-                trust_config.read_text()
-            )
-        else:
-            trust_config = sigstore_models.ClientTrustConfig.production()
+        trust_config = _resolve_trust_config(
+            use_staging=use_staging,
+            trust_config=trust_config,
+            instance=instance,
+        )
 
         if not oidc_issuer:
             oidc_issuer = trust_config.signing_config.get_oidc_url()
 
-        self._issuer = sigstore_oidc.Issuer(oidc_issuer)
+        self._oidc_issuer = oidc_issuer
+        self._issuer: sigstore_oidc.Issuer | None = None
         self._signing_context = (
             sigstore_signer.SigningContext.from_trust_config(trust_config)
         )
@@ -154,6 +189,9 @@ class Signer(signing.Signer):
             token = sigstore_oidc.detect_credential(self._client_id)
             if token:
                 return sigstore_oidc.IdentityToken(token, self._client_id)
+
+        if self._issuer is None:
+            self._issuer = sigstore_oidc.Issuer(self._oidc_issuer)
 
         return self._issuer.identity_token(
             force_oob=self._force_oob,
@@ -188,6 +226,7 @@ class Verifier(signing.Verifier):
         oidc_issuer: str,
         use_staging: bool = False,
         trust_config: pathlib.Path | None = None,
+        instance: str | None = None,
     ):
         """Initializes Sigstore verifiers.
 
@@ -206,15 +245,16 @@ class Verifier(signing.Verifier):
               PKI and trust configurations, instead of the default Sigstore
               setup. If not specified, the default Sigstore configuration
               is used.
+            instance: A Sigstore TUF repository URL. When provided, trust
+              configuration is fetched via TUF from this URL instead of using
+              the default production instance or a manual config file. Must
+              have been bootstrapped first via `bootstrap_instance()`.
         """
-        if trust_config:
-            trust_config = sigstore_models.ClientTrustConfig.from_json(
-                trust_config.read_text()
-            )
-        elif use_staging:
-            trust_config = sigstore_models.ClientTrustConfig.staging()
-        else:
-            trust_config = sigstore_models.ClientTrustConfig.production()
+        trust_config = _resolve_trust_config(
+            use_staging=use_staging,
+            trust_config=trust_config,
+            instance=instance,
+        )
 
         self._verifier = sigstore_verifier.Verifier(
             trusted_root=trust_config.trusted_root

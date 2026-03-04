@@ -72,8 +72,11 @@ class Signer(ec_key.Signer):
                 "the public key paired with the private key"
             )
 
-        self._trust_chain = x509.load_pem_x509_certificates(
-            b"".join([path.read_bytes() for path in certificate_chain_paths])
+        chain_bytes = b"".join(
+            [path.read_bytes() for path in certificate_chain_paths]
+        )
+        self._trust_chain = (
+            x509.load_pem_x509_certificates(chain_bytes) if chain_bytes else []
         )
 
     @override
@@ -231,7 +234,7 @@ class Verifier(sigstore_pb.Verifier):
             if usage.value.digital_signature:
                 can_use_for_signing = True
         except x509.ExtensionNotFound:
-            logger.warn("Certificate does not specify 'KeyUsage'.")
+            logger.warning("Certificate does not specify 'KeyUsage'.")
 
         if not can_use_for_signing:
             try:
@@ -241,7 +244,9 @@ class Verifier(sigstore_pb.Verifier):
                 if oid.ExtendedKeyUsageOID.CODE_SIGNING in usage.value:
                     can_use_for_signing = True
             except x509.ExtensionNotFound:
-                logger.warn("Certificate does not specify 'ExtendedKeyUsage'.")
+                logger.warning(
+                    "Certificate does not specify 'ExtendedKeyUsage'."
+                )
 
         if not can_use_for_signing:
             raise ValueError("Signing certificate cannot be used for signing")

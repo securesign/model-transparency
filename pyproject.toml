@@ -26,7 +26,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Topic :: Security",
   "Topic :: Security :: Cryptography",
@@ -39,7 +39,8 @@ dependencies = [
   "click",
   "cryptography",
   "in-toto-attestation",
-  "sigstore>=4.0",
+  "oras>=0.2.30",
+  "sigstore>=4.2",
   "sigstore-models>=0.0.5",
   "typing_extensions",
 ]
@@ -152,6 +153,26 @@ python = "3.12"
 [tool.hatch.envs.type.scripts]
 check = "pytype -k -j auto src tests benchmarks"
 
+[tool.hatch.envs.hatch-static-analysis]
+config-path = "none"
+
+[tool.hatch.envs.hatch-static-analysis.scripts]
+format-check = "ruff format --check src/"
+format-fix = "ruff format src/"
+lint-check = "ruff check src/"
+lint-fix = "ruff check --fix src/"
+
+[tool.hatch.envs.cli]
+description = """Custom environment for CLI tests.
+Use `hatch run cli:test` to run CLI tests.
+"""
+features = [
+    "pkcs11",
+]
+
+[tool.hatch.envs.cli.scripts]
+test = "bash ./scripts/tests/testrunner"
+
 [tool.coverage.report]
 exclude_also = [
   "pass",
@@ -183,11 +204,7 @@ skip-magic-trailing-comma = true
 [tool.ruff.lint]
 select = ["B", "D", "E", "F", "I", "N", "PLC", "PLE", "PT", "SIM", "UP", "W"]
 ignore = [
-  # TODO: selectively enable back most of these in subsequent PRs
-  "B024", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D417",
-  # Unnecessary arguments can help with clarity
-  "UP012", "UP015",
-  "PLC0415", # Lazy imports
+  "PLC0415",  # Intentional lazy imports for optional dependencies
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]

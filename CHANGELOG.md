@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-02
+
+### Added
+- Added `--instance` option for signing and verification using TUF-based trust bootstrapping. Use `model_signing trust-instance root.json --instance URL` to bootstrap, then `--instance URL` on sign/verify commands.
+- Added support for `oci://` prefix in image references (e.g., `oci://quay.io/user/model:latest`).
+- Added support for ModelCar format OCI images with OLOT annotations. Original file hashes are extracted from `olot.layer.content.digest` annotations for interoperable signing.
+- Added support for verifying OCI images using a local signature file (`--signature`) instead of fetching from registry referrers API.
+
+### Changed
+- Updated `sigstore` dependency to `>=4.2` for TUF-based instance support.
+
 ## [0.0.3] - 2026-01-12
 
 Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](https://github.com/sigstore/model-transparency) v1.1.1.
 
 ### Added
-- Added support for signing and verifying OCI model manifests directly without requiring model files on disk. OCI manifest JSON files can be detected and signed, or verified against. When verifying local files against signatures created from OCI manifests, the tool automatically matches files by path using `org.opencontainers.image.title` annotations (ORAS-style), enabling cross-verification between OCI images and local model directories.
+- Added support for signing and verifying OCI model manifests directly without requiring model files on disk. OCI manifest JSON files can be detected and signed, or verified against.
+- Added OCI image signing and verification. Sign and verify container images directly in registries using `model_signing sign sigstore quay.io/user/model:latest`. Supports both OCI 1.1 Referrers API and tag-based attachment.
+- Added smart target detection for CLI commands. The tool auto-detects the target type: if the path exists locally, it is signed/verified as a file; otherwise, it is treated as an OCI image reference.
+- Added `--local-model` option to verify that local files match a signed image's layer digests.
+- Added `sign_image()` and `verify_image()` methods to the Python API.
 - Added the `digest` subcommand to compute and print a model's digest. This enables other tools to easily pair the attestations with a model directory.
 - Package renamed to `rh-model-signing` for Red Hat distribution.
 - Added `rh_model_signing` CLI entry point (in addition to `model_signing`).
@@ -94,7 +109,8 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
 - [Demo notebook](https://colab.sandbox.google.com/drive/18IB_uipduXYq0ohMxJv2xHfeihLIcGMT) to showcase API and CLI examples.
 
 
-[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/securesign/model-transparency/compare/v0.0.3...v0.1.0
 [0.0.3]: https://github.com/securesign/model-transparency/releases/tag/v0.0.3
 
 <!-- Upstream changelog references -->
