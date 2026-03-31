@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-13
+
+### Added
+- First stable release of `rh-model-signing`.
+- All features from 0.1.0 considered stable and production-ready.
+
+### Changed
+- Promoted from pre-release (0.x) to stable (1.x) versioning.
+
 ## [0.1.0] - 2026-03-02
 
 ### Added
@@ -109,7 +118,8 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
 - [Demo notebook](https://colab.sandbox.google.com/drive/18IB_uipduXYq0ohMxJv2xHfeihLIcGMT) to showcase API and CLI examples.
 
 
-[Unreleased]: https://github.com/securesign/model-transparency/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/securesign/model-transparency/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/securesign/model-transparency/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/securesign/model-transparency/compare/v0.0.3...v0.1.0
 [0.0.3]: https://github.com/securesign/model-transparency/releases/tag/v0.0.3
 
