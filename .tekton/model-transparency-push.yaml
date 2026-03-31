@@ -17,6 +17,10 @@ metadata:
   namespace: rhtas-tenant
 spec:
   params:
+  - name: release-version
+    value: "1.4.0"
+  - name: image-version
+    value: "1.0.0"
   - name: git-url
     value: '{{source_url}}'
   - name: revision
