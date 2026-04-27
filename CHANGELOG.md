@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-16
+
+### Fixed
+- Fixed `--instance` flag not being passed to Sigstore signer/verifier, causing signing to use public Sigstore OIDC instead of the private instance's OIDC.
+
 ## [1.0.0] - 2026-03-13
 
 ### Added
@@ -118,7 +123,8 @@ Red Hat Tech Preview release, based on upstream [sigstore/model-transparency](ht
 - [Demo notebook](https://colab.sandbox.google.com/drive/18IB_uipduXYq0ohMxJv2xHfeihLIcGMT) to showcase API and CLI examples.
 
 
-[Unreleased]: https://github.com/securesign/model-transparency/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/securesign/model-transparency/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/securesign/model-transparency/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/securesign/model-transparency/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/securesign/model-transparency/compare/v0.0.3...v0.1.0
 [0.0.3]: https://github.com/securesign/model-transparency/releases/tag/v0.0.3
