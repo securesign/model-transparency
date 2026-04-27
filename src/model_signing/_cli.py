@@ -574,6 +574,7 @@ def _sign_sigstore(
                 client_id=client_id,
                 client_secret=client_secret,
                 trust_config=trust_config,
+                instance=instance,
             )
 
             if is_file:
@@ -948,6 +949,7 @@ def _verify_sigstore(
                 oidc_issuer=identity_provider,
                 use_staging=use_staging,
                 trust_config=trust_config,
+                instance=instance,
             )
 
             if is_file:
