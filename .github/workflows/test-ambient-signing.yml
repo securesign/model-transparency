@@ -1,0 +1,57 @@
+name: Test Ambient Credentials Signing
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  id-token: write  # Required for OIDC token
+  contents: read
+
+jobs:
+  test-signing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install rh-model-signing
+        run: pip install rh-model-signing
+
+      - name: Create test model
+        run: |
+          mkdir -p test-model
+          echo "test weights" > test-model/weights.bin
+          echo '{"name": "test"}' > test-model/config.json
+
+      - name: Bootstrap trust (public Sigstore)
+        run: |
+          curl -sL https://tuf-repo-cdn.sigstore.dev/root.json -o root.json
+          rh_model_signing trust-instance root.json --instance https://tuf-repo-cdn.sigstore.dev
+
+      - name: Sign with ambient credentials
+        run: |
+          rh_model_signing sign sigstore test-model \
+            --instance https://tuf-repo-cdn.sigstore.dev \
+            --use-ambient-credentials \
+            --signature model.sig
+
+      - name: Verify signature
+        run: |
+          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/test-ambient-signing.yml@${{ github.ref }}"
+          echo "Verifying with identity: $IDENTITY"
+          rh_model_signing verify sigstore test-model \
+            --instance https://tuf-repo-cdn.sigstore.dev \
+            --signature model.sig \
+            --identity "$IDENTITY" \
+            --identity-provider "https://token.actions.githubusercontent.com"
+
+      - name: Upload signature artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-signature
+          path: model.sig
