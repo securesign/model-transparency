@@ -17,6 +17,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize]
+  push:
+    branches: [main]
 
 permissions: {}
 
@@ -34,6 +36,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     permissions:
+      id-token: write
       contents: read
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -80,3 +83,16 @@ jobs:
             echo "::warning file=$file_name,line=$line_start,endLine=$line_end::$message"
           done
         done
+
+    - name: Generate coverage XML report
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      run: hatch run hatch-test.py3.12:coverage xml
+
+    - name: Upload coverage to Codecov
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
+      with:
+        files: coverage.xml
+        flags: unit
+        use_oidc: true
+        fail_ci_if_error: true
