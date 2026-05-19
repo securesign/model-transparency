@@ -37,7 +37,7 @@ dependencies = [
   "asn1crypto",
   "blake3",
   "click",
-  "cryptography",
+  "cryptography>=46.0.7",
   "in-toto-attestation",
   "oras>=0.2.30",
   "sigstore>=4.2",
