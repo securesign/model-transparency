@@ -7,20 +7,20 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "true"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "release-1.0"
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: model-transparency
-    appstudio.openshift.io/component: model-transparency
+    appstudio.openshift.io/application: model-transparency-v1-0
+    appstudio.openshift.io/component: model-transparency-v1-0
     pipelines.appstudio.openshift.io/type: build
-  name: model-transparency-on-push
+  name: model-transparency-v1-0-on-push
   namespace: rhtas-tenant
 spec:
   params:
   - name: release-version
-    value: "1.4.1"
+    value: "1.4.2"
   - name: image-version
-    value: "1.0.1"
+    value: "1.0.2"
   - name: git-url
     value: '{{source_url}}'
   - name: revision
@@ -47,7 +47,7 @@ spec:
       - name: pathInRepo
         value: 'pipelines/docker-build-multi-platform-oci-ta.yaml'
   taskRunTemplate:
-    serviceAccountName: build-pipeline-model-transparency
+    serviceAccountName: build-pipeline-model-transparency-v1-0
   workspaces:
   - name: git-auth
     secret:
