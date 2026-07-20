@@ -40,7 +40,7 @@ dependencies = [
   "cryptography>=46.0.7",
   "in-toto-attestation",
   "oras>=0.2.30",
-  "pyasn1>=0.6.2",
+  "pyasn1>=0.6.4",
   "PyJWT>=2.13.0",
   "sigstore>=4.2",
   "sigstore-models>=0.0.5",
