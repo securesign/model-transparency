@@ -219,6 +219,56 @@ class TestSigstoreSigning:
 
 
 class TestKeySigning:
+    def test_sign_to_bytes(self, base_path, populate_tmpdir):
+        os.chdir(base_path)
+
+        model_path = populate_tmpdir
+        signature = Path(model_path / "model.sig")
+        private_key = Path(TESTDATA / "keys/certificate/signing-key.pem")
+        public_key = Path(TESTDATA / "keys/certificate/signing-key-pub.pem")
+        hashing_config = hashing.Config().set_ignored_paths(
+            paths=[signature], ignore_git_paths=False
+        )
+
+        config = (
+            signing.Config()
+            .use_elliptic_key_signer(private_key=private_key)
+            .set_hashing_config(hashing_config)
+        )
+
+        # In-memory signing returns the Sigstore bundle as bytes, without
+        # writing anything to disk.
+        signature_bytes = config.sign_to_bytes(model_path)
+        assert isinstance(signature_bytes, bytes)
+        assert not signature.exists()
+
+        # The bytes are a valid Sigstore bundle carrying the expected payload.
+        bundle = json.loads(signature_bytes)
+        payload = json.loads(b64decode(bundle["dsseEnvelope"]["payload"]))
+        signed_files = [
+            entry["name"] for entry in payload["predicate"]["resources"]
+        ]
+        assert signed_files == [".gitignore", "signme-1", "signme-2"]
+
+        # The in-memory bundle is not just well-formed, it verifies: persist
+        # the bytes unmodified and run the normal verification path over them.
+        # `verify` raises on any failure, so reaching the next line is the
+        # assertion.
+        signature.write_bytes(signature_bytes)
+        verifying.Config().use_elliptic_key_verifier(
+            public_key=public_key
+        ).set_hashing_config(hashing_config).verify(model_path, signature)
+
+        # The in-memory payload matches what writing to disk produces. The
+        # bundle signature itself is non-deterministic (ECDSA), so we compare
+        # the signed DSSE payload rather than the raw bytes.
+        config.sign(model_path, signature)
+        disk_bundle = json.loads(signature.read_text())
+        disk_payload = json.loads(
+            b64decode(disk_bundle["dsseEnvelope"]["payload"])
+        )
+        assert payload == disk_payload
+
     def test_sign_and_verify(self, base_path, populate_tmpdir):
         os.chdir(base_path)
 
@@ -275,6 +325,52 @@ class TestKeySigning:
             signature, ignore_git_paths, ["model.sig", "ignored"]
         )
         assert get_model_name(signature) == os.path.basename(model_path)
+
+    def test_reused_config_does_not_leak_ignore_paths(
+        self, base_path, tmp_path
+    ):
+        os.chdir(base_path)
+
+        private_key = Path(TESTDATA / "keys/certificate/signing-key.pem")
+        public_key = Path(TESTDATA / "keys/certificate/signing-key-pub.pem")
+
+        # Model A is signed with its scratch file explicitly ignored.
+        model_a = tmp_path / "model_a"
+        model_a.mkdir()
+        (model_a / "weights").write_text("weights-a")
+        (model_a / "notes").write_text("scratch, excluded from signing")
+        sig_a = tmp_path / "a.sig"
+        signing.Config().use_elliptic_key_signer(
+            private_key=private_key
+        ).set_hashing_config(
+            hashing.Config().set_ignored_paths(
+                paths=[model_a / "notes"], ignore_git_paths=False
+            )
+        ).sign(model_a, sig_a)
+
+        # Model B is signed without ignoring anything.
+        model_b = tmp_path / "model_b"
+        model_b.mkdir()
+        (model_b / "weights").write_text("weights-b")
+        sig_b = tmp_path / "b.sig"
+        signing.Config().use_elliptic_key_signer(
+            private_key=private_key
+        ).set_hashing_config(
+            hashing.Config().set_ignored_paths(paths=[], ignore_git_paths=False)
+        ).sign(model_b, sig_b)
+
+        # An unsigned file is planted in B at the path A happened to ignore.
+        (model_b / "notes").write_text("not covered by B's signature")
+
+        config = verifying.Config().use_elliptic_key_verifier(
+            public_key=public_key
+        )
+        config.verify(model_a, sig_a)
+
+        # B's signature never excluded "notes", so the planted file must be
+        # reported rather than silently skipped using A's ignore paths.
+        with pytest.raises(ValueError, match="Extra files"):
+            config.verify(model_b, sig_b)
 
 
 class TestCertificateSigning:
@@ -552,4 +648,89 @@ class TestOCIManifestSigning:
                 hashing.Config().set_ignored_paths(
                     paths=[signature], ignore_git_paths=False
                 )
+            ).verify(model_path, signature)
+
+
+class TestVerifierHonoursRecordedSymlinkPolicy:
+    """The verifier applies the symlink policy recorded in the manifest.
+
+    OMS v1.0 6.1.1 says "The verifier MUST apply the same `allow_symlinks`
+    policy recorded in `serialization.allow_symlinks`". Every
+    `model_signing verify` subcommand builds a hashing config from its own
+    `--allow-symlinks` flag and passes it to `set_hashing_config`, so
+    `verify()` used the caller's value and `_guess_hashing_config`, the one
+    place that does read the recorded policy, never ran (issue #666).
+    """
+
+    def _model_with_symlink(self, tmp_path: Path) -> Path:
+        """Builds a model directory containing one symlink."""
+        model = tmp_path / "model"
+        model.mkdir()
+        (model / "weights").write_text("weights")
+        (model / "link").symlink_to(model / "weights")
+        return model
+
+    def test_recorded_policy_wins_over_the_callers_flag(self, tmp_path):
+        """A recorded "on" survives a caller that did not ask for symlinks."""
+        model_path = self._model_with_symlink(tmp_path)
+        signature = tmp_path / "model.sig"
+        private_key = Path(TESTDATA / "keys/certificate/signing-key.pem")
+        public_key = Path(TESTDATA / "keys/certificate/signing-key-pub.pem")
+
+        # Signed with symlinks included, which is what the manifest records.
+        signing.Config().use_elliptic_key_signer(
+            private_key=private_key, password=None
+        ).set_hashing_config(
+            hashing.Config()
+            .set_ignored_paths(paths=[signature], ignore_git_paths=False)
+            .set_allow_symlinks(True)
+        ).sign(model_path, signature)
+
+        assert "link" in get_signed_files(signature)
+
+        # Verified by a caller that did not pass --allow-symlinks, which is the
+        # default. The signed policy has to win, or the symlink is not hashed
+        # and the model no longer matches its own signature.
+        verifying.Config().use_elliptic_key_verifier(
+            public_key=public_key
+        ).set_hashing_config(
+            hashing.Config()
+            .set_ignored_paths(paths=[signature], ignore_git_paths=False)
+            .set_allow_symlinks(False)
+        ).verify(model_path, signature)
+
+    def test_policy_off_is_also_applied(self, tmp_path):
+        """A recorded "off" survives a caller that did ask for symlinks."""
+        # The other direction. Sign a model with no symlink and the policy
+        # off, then add a symlink and verify with the caller asking for
+        # symlinks. The recorded "off" has to win: under the caller's "on"
+        # the symlink would be hashed as a file nobody signed.
+        model_path = tmp_path / "model"
+        model_path.mkdir()
+        (model_path / "weights").write_text("weights")
+        signature = tmp_path / "model.sig"
+        private_key = Path(TESTDATA / "keys/certificate/signing-key.pem")
+        public_key = Path(TESTDATA / "keys/certificate/signing-key-pub.pem")
+
+        signing.Config().use_elliptic_key_signer(
+            private_key=private_key, password=None
+        ).set_hashing_config(
+            hashing.Config()
+            .set_ignored_paths(paths=[signature], ignore_git_paths=False)
+            .set_allow_symlinks(False)
+        ).sign(model_path, signature)
+
+        (model_path / "link").symlink_to(model_path / "weights")
+
+        # Serialization refuses a symlink outright when the policy is off,
+        # so applying the recorded value turns a model that has gained a
+        # symlink since signing into a refusal rather than a silent re-hash
+        # under a policy the signer never agreed to.
+        with pytest.raises(ValueError, match="because it is a symlink"):
+            verifying.Config().use_elliptic_key_verifier(
+                public_key=public_key
+            ).set_hashing_config(
+                hashing.Config()
+                .set_ignored_paths(paths=[signature], ignore_git_paths=False)
+                .set_allow_symlinks(True)
             ).verify(model_path, signature)

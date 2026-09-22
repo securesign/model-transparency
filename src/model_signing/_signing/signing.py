@@ -103,12 +103,16 @@ def dsse_payload_to_manifest(dsse_payload: dict[str, Any]) -> manifest.Manifest:
     expected_digest = subjects[0]["digest"]["sha256"]
 
     predicate = dsse_payload["predicate"]
+    resources = predicate["resources"]
+    if not resources:
+        raise ValueError("Bundle contains no resources")
+
     serialization_args = predicate["serialization"]
     serialization = manifest.SerializationType.from_args(serialization_args)
 
     hasher = memory.SHA256()
     items = []
-    for resource in predicate["resources"]:
+    for resource in resources:
         name = resource["name"]
         algorithm = resource["algorithm"]
         digest_value = resource["digest"]
@@ -302,6 +306,19 @@ class Signature(metaclass=abc.ABCMeta):
 
         Args:
             path: The path to write the signature to.
+        """
+
+    @abc.abstractmethod
+    def to_bytes(self) -> bytes:
+        """Serializes the signature to bytes.
+
+        Returns the same Sigstore bundle content that `write` persists to
+        disk, encoded as UTF-8 JSON. This lets callers in serverless or
+        pipeline contexts obtain the signature in memory without touching the
+        filesystem.
+
+        Returns:
+            The serialized signature, as UTF-8 encoded bytes.
         """
 
     @classmethod

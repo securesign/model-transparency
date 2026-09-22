@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added the `digest` subcommand to compute and print a model's digest. This enables other tools to easily pair the attestations with a model directory.
+- Added `--module-paths` option to PKCS #11 signing methods pkcs11-key and pkcs11-certificate.
+- Added `model_signing.signing.Config.sign_to_bytes()` (and a module-level `model_signing.signing.sign_to_bytes()` helper) that return the Sigstore bundle in memory as bytes instead of writing it to disk. This supports serverless and pipeline callers that need to stream or store the signature without filesystem access. ([#582](https://github.com/sigstore/model-transparency/issues/582))
+
+### Changed
+- Standardized CLI flags to use hyphens (e.g., `--trust-config` instead of `--trust_config`). Underscore variants are still accepted for backwards compatibility via token normalization.
+
+### Fixed
+- Fixed certificate verification accepting a signing certificate whose extended key usage does not permit code signing (for example a TLS `serverAuth` certificate), as long as the digitalSignature key usage bit was set. ([#648](https://github.com/sigstore/model-transparency/pull/648))
+- Fixed a bug where reusing a single `verifying.Config` across models let the ignore paths and guessed hashing configuration from one verification carry over into later ones. A file that a later model's signature never excluded could be silently skipped instead of reported as unsigned. ([#650](https://github.com/sigstore/model-transparency/pull/650))
+- Fixed a bug where installing from the sdist produced an empty wheel with zero Python modules. The hatch `packages` directive was scoped to all build targets instead of the wheel target only, causing the sdist's flattened layout to not match the expected `src/` path. ([#636](https://github.com/sigstore/model-transparency/issues/636))
+- Fixed a bug where ignored symlinks could raise `ValueError`s if allow_symlinks was unset, even though they were skipped during serialization. ([#550](https://github.com/sigstore/model-transparency/pull/550))
+- Fixed a bug where any PEM encoded key could be read during the key-based flows which resulted in a Python exception because the rest of the code only supported elliptic curve keys. ([#573](https://github.com/sigstore/model-transparency/pull/573))
+
 ## [1.0.3] - 2026-06-08
 
 ### Fixed
