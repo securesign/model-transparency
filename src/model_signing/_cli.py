@@ -134,6 +134,15 @@ _pkcs11_uri_option = click.option(
     help="PKCS #11 URI of the private key.",
 )
 
+# Decorator for paths to the PKCS #11 modules
+_module_paths_option = click.option(
+    "--module-paths",
+    type=str,
+    metavar="PKCS11_MODULE_PATHS",
+    multiple=True,
+    help="PKCS #11 module paths.",
+)
+
 # Decorator for the commonly used option to pass a certificate chain to
 # establish root of trust (when signing or verifying using certificates).
 _certificate_root_of_trust_option = click.option(
@@ -694,6 +703,7 @@ def _sign_key(
 @_allow_symlinks_option
 @_write_signature_option
 @_pkcs11_uri_option
+@_module_paths_option
 def _sign_pkcs11_key(
     model_path: pathlib.Path,
     ignore_paths: Iterable[pathlib.Path],
@@ -701,6 +711,7 @@ def _sign_pkcs11_key(
     allow_symlinks: bool,
     signature: pathlib.Path,
     pkcs11_uri: str,
+    module_paths: Iterable[str],
 ) -> None:
     """Sign using a private key using a PKCS #11 URI.
 
@@ -711,6 +722,9 @@ def _sign_pkcs11_key(
     Traditionally, signing could be achieved by using a public/private key pair.
     Pass the PKCS #11 URI of the signing key using `--pkcs11-uri`.
 
+    Paths in PKCS11_MODULE_PATHS provide access to PKCS #11 modules located
+    outside the default paths of /usr/lib/pkcs11 and /usr/lib64/pkcs11.
+
     Note that this method does not provide a way to tie to the identity of the
     signer, outside of pairing the keys. Also note that we don't offer key
     management protocols.
@@ -720,7 +734,7 @@ def _sign_pkcs11_key(
             model_path, list(ignore_paths) + [signature]
         )
         model_signing.signing.Config().use_pkcs11_signer(
-            pkcs11_uri=pkcs11_uri
+            pkcs11_uri=pkcs11_uri, module_paths=module_paths
         ).set_hashing_config(
             model_signing.hashing.Config()
             .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
@@ -797,6 +811,7 @@ def _sign_certificate(
 @_pkcs11_uri_option
 @_signing_certificate_option
 @_certificate_root_of_trust_option
+@_module_paths_option
 def _sign_pkcs11_certificate(
     model_path: pathlib.Path,
     ignore_paths: Iterable[pathlib.Path],
@@ -806,6 +821,7 @@ def _sign_pkcs11_certificate(
     pkcs11_uri: str,
     signing_certificate: pathlib.Path,
     certificate_chain: Iterable[pathlib.Path],
+    module_paths: Iterable[str],
 ) -> None:
     """Sign using a certificate.
 
@@ -822,6 +838,9 @@ def _sign_pkcs11_certificate(
     root of trust (this option can be repeated as needed, or all cerificates
     could be placed in a single file).
 
+    Paths in PKCS11_MODULE_PATHS provide access to PKCS #11 modules located
+    outside the default paths of /usr/lib/pkcs11 and /usr/lib64/pkcs11.
+
     Note that we don't offer certificate and key management protocols.
     """
     try:
@@ -832,6 +851,7 @@ def _sign_pkcs11_certificate(
             pkcs11_uri=pkcs11_uri,
             signing_certificate=signing_certificate,
             certificate_chain=certificate_chain,
+            module_paths=module_paths,
         ).set_hashing_config(
             model_signing.hashing.Config()
             .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)
@@ -1141,6 +1161,21 @@ def _verify_key(
     show_default=True,
     help="Log SHA256 fingerprints of all certificates.",
 )
+@click.option(
+    "--san-uri",
+    "san_uris",
+    type=str,
+    multiple=True,
+    default=(),
+    help=(
+        "Require this URI to appear in the leaf certificate's "
+        "SubjectAlternativeName. Repeat to require multiple. Pins signer "
+        "identity so a different certificate issued by the same CA cannot "
+        "produce accepted signatures. This is the mechanism SPIFFE SVIDs use "
+        "to carry a workload identity (spiffe://...) and is where SPIFFE-aware "
+        "verifiers are required to check."
+    ),
+)
 @_ignore_unsigned_files_option
 def _verify_certificate(
     model_path: pathlib.Path,
@@ -1150,6 +1185,7 @@ def _verify_certificate(
     allow_symlinks: bool,
     certificate_chain: Iterable[pathlib.Path],
     log_fingerprints: bool,
+    san_uris: tuple[str, ...],
     ignore_unsigned_files: bool,
 ) -> None:
     """Verify using a certificate.
@@ -1163,6 +1199,13 @@ def _verify_certificate(
     certificate chain, using `--certificate-chain` (this option can be repeated
     as needed, or all certificates could be placed in a single file).
 
+    To bind the signature to a specific signer identity (and not merely to
+    "some certificate issued by this CA"), pass `--san-uri`. The check runs
+    against the leaf certificate embedded in the bundle, after chain
+    verification succeeds. SPIFFE SVIDs carry the SPIFFE ID in the URI SAN;
+    passing the expected `spiffe://` URI is the SPIFFE-mandated verification
+    step.
+
     Note that we don't offer certificate and key management protocols.
     """
     if log_fingerprints:
@@ -1175,6 +1218,7 @@ def _verify_certificate(
         model_signing.verifying.Config().use_certificate_verifier(
             certificate_chain=certificate_chain,
             log_fingerprints=log_fingerprints,
+            expected_san_uris=san_uris,
         ).set_hashing_config(
             model_signing.hashing.Config()
             .set_ignored_paths(paths=ignored, ignore_git_paths=ignore_git_paths)

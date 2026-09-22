@@ -29,14 +29,14 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: Set up Hatch
-      uses: pypa/hatch@257e27e51a6a5616ed08a39a408a21c35c9931bc # install
+      uses: pypa/hatch@f647ed70d49adb885f53a27d1c7f5bdaeacf2c60 # install
     - name: Build artifacts
       run: hatch build
-    - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         path: dist/
         name: dist.zip
@@ -54,11 +54,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist.zip
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   build_and_push_container:
     name: Build and Push Docker Image
@@ -71,12 +71,12 @@ jobs:
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         id: registry_login
         with:
           registry: ghcr.io
@@ -91,7 +91,7 @@ jobs:
 
       - name: Build minimal image
         id: build_minimal_image
-        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
+        uses: redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3.1.0
         with:
           containerfiles: |
             ./Containerfile
@@ -104,13 +104,13 @@ jobs:
             APP_VERSION=${{ env.APP_VERSION }}
 
       - id: docker_meta_minimal
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.build_minimal_image.outputs.image }}
           tags: type=sha,format=long,type=ref,event=branch
 
       - name: Push minimal image to GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         id: push_minimal
         with:
           image: ${{ steps.build_minimal_image.outputs.image }}
@@ -118,7 +118,7 @@ jobs:
           registry: ghcr.io
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/sigstore/model-transparency-cli
           subject-digest: ${{ steps.push_minimal.outputs.digest }}
@@ -126,7 +126,7 @@ jobs:
 
       - name: Build full image
         id: build_full_image
-        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
+        uses: redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3.1.0
         with:
           containerfiles: |
             ./Containerfile
@@ -139,13 +139,13 @@ jobs:
             APP_VERSION=${{ env.APP_VERSION }}
 
       - id: docker_meta_full
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.build_full_image.outputs.image }}
           tags: type=sha,format=long,type=ref,event=branch
 
       - name: Push full image to GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         id: push_full
         with:
           image: ${{ steps.build_full_image.outputs.image }}
@@ -153,7 +153,7 @@ jobs:
           registry: ghcr.io
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/sigstore/model-transparency-cli
           subject-digest: ${{ steps.push_full.outputs.digest }}

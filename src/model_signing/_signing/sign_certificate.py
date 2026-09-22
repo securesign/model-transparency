@@ -16,6 +16,7 @@
 
 import base64
 from collections.abc import Iterable
+import datetime
 import logging
 import pathlib
 
@@ -63,6 +64,18 @@ class Signer(ec_key.Signer):
         self._signing_certificate = x509.load_pem_x509_certificate(
             signing_certificate_path.read_bytes()
         )
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if now > self._signing_certificate.not_valid_after_utc:
+            raise ValueError(
+                "Signing certificate has expired "
+                f"(expired {self._signing_certificate.not_valid_after_utc})"
+            )
+        if now < self._signing_certificate.not_valid_before_utc:
+            raise ValueError(
+                "Signing certificate is not yet valid "
+                f"(valid from {self._signing_certificate.not_valid_before_utc})"
+            )
 
         public_key_from_key = self._private_key.public_key()
         public_key_from_certificate = self._signing_certificate.public_key()
@@ -130,6 +143,7 @@ class Verifier(sigstore_pb.Verifier):
         self,
         certificate_chain_paths: Iterable[pathlib.Path] = frozenset(),
         log_fingerprints: bool = False,
+        expected_san_uris: Iterable[str] = frozenset(),
     ):
         """Initializes the verifier with the list of certificates to use.
 
@@ -139,8 +153,15 @@ class Verifier(sigstore_pb.Verifier):
               in which case we would use the root certificates from the
               operating system, as per `certifi.where()`.
             log_fingerprints: Log the fingerprints of certificates
+            expected_san_uris: If non-empty, verification additionally requires
+              that every listed URI appear in the leaf certificate's
+              SubjectAltName URI entries. This binds the signature to a signer
+              identity (e.g. a SPIFFE ID, which per RFC-compliant SVIDs is
+              always carried in the URI SAN) rather than trusting any
+              certificate issued under the CA.
         """
         self._log_fingerprints = log_fingerprints
+        self._expected_san_uris = frozenset(expected_san_uris)
 
         if not certificate_chain_paths:
             certificate_chain_paths = [pathlib.Path(certifi.where())]
@@ -209,9 +230,6 @@ class Verifier(sigstore_pb.Verifier):
             signing_chain.certificates[0].raw_bytes
         )
 
-        max_signing_time = signing_certificate.not_valid_before_utc
-        self._store.set_time(max_signing_time)
-
         trust_chain_ssl = [
             _to_openssl_certificate(
                 certificate.raw_bytes, self._log_fingerprints
@@ -248,7 +266,61 @@ class Verifier(sigstore_pb.Verifier):
                     "Certificate does not specify 'ExtendedKeyUsage'."
                 )
 
+        # An extended key usage, when present, restricts the certificate to the
+        # listed purposes (RFC 5280 4.2.1.12). A certificate not marked for code
+        # signing must be rejected even when the digitalSignature key usage bit
+        # is set, otherwise a TLS (serverAuth) certificate chaining to a trusted
+        # root would be accepted for model signing.
+        try:
+            eku = extensions.get_extension_for_class(
+                x509.ExtendedKeyUsage
+            ).value
+            if (
+                oid.ExtendedKeyUsageOID.CODE_SIGNING not in eku
+                and oid.ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE not in eku
+            ):
+                can_use_for_signing = False
+        except x509.ExtensionNotFound:
+            pass
+
         if not can_use_for_signing:
             raise ValueError("Signing certificate cannot be used for signing")
 
+        self._verify_san_identity(signing_certificate)
+
         return signing_certificate.public_key()
+
+    def _verify_san_identity(
+        self, signing_certificate: x509.Certificate
+    ) -> None:
+        """Assert the leaf's SubjectAltName carries every expected URI.
+
+        Chain-of-trust proves the CA vouched for *some* leaf; it does not tell
+        us *which* leaf. If the caller declared expected SAN URIs (e.g. a
+        SPIFFE ID), the signing certificate embedded in the bundle must carry
+        them, otherwise a different (but still CA-issued) key could produce
+        accepted signatures.
+        """
+        if not self._expected_san_uris:
+            return
+
+        try:
+            san = signing_certificate.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName
+            ).value
+        except x509.ExtensionNotFound as err:
+            raise ValueError(
+                "Signing certificate has no SubjectAlternativeName; cannot "
+                "verify expected signer identity."
+            ) from err
+
+        actual_uris = frozenset(
+            san.get_values_for_type(x509.UniformResourceIdentifier)
+        )
+        missing_uris = self._expected_san_uris - actual_uris
+        if missing_uris:
+            raise ValueError(
+                "Signing certificate SubjectAltName is missing expected "
+                f"URI(s): {sorted(missing_uris)} "
+                f"(present: {sorted(actual_uris)})"
+            )
