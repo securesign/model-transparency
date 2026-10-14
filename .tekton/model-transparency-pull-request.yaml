@@ -19,7 +19,7 @@ metadata:
 spec:
   params:
   - name: release-version
-    value: "1.5.1"
+    value: "1.4.4"
   - name: image-version
     value: "1.0.5"
   - name: git-url
