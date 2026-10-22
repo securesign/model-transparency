@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.6] - 2026-11-05
 
 ### Fixed
+- Added `pyOpenSSL` as a direct dependency. `model_signing` imports `OpenSSL` for certificate chain verification but relied on `sigstore` to install it, and `sigstore` 4.5.1 no longer does, so a fresh install failed with `ModuleNotFoundError: No module named 'OpenSSL'`. ([#685](https://github.com/sigstore/model-transparency/issues/685))
 - Security fixes.
 
 ## [1.0.5] - 2026-10-19
