@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "rh-model-signing"
 dynamic = ["version"]
-description = "A tool for signing and verifying ML models (Red Hat Tech Preview)"
+description = "A tool for signing and verifying ML models"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -38,6 +38,7 @@ dependencies = [
   "blake3",
   "click",
   "cryptography>=46.0.7",
+  "dnspython>=2.9.0",
   "in-toto-attestation",
   "oras>=0.2.30",
   "pyasn1>=0.6.4",
