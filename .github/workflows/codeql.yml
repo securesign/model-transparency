@@ -16,14 +16,14 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "release-1.0" ]
     paths-ignore:
       - 'Dockerfile.model-transparency.rh'
       - 'renovate.json'
       - '.tekton/**'
   pull_request:
     # The branches below must be a subset of the branches above
-    branches: [ "main" ]
+    branches: [ "release-1.0" ]
     paths-ignore:
       - 'Dockerfile.model-transparency.rh'
       - 'renovate.json'
