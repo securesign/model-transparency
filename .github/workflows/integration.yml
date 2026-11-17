@@ -20,6 +20,9 @@ on:
     paths-ignore:
       - '**/*.md'
       - '*.md'
+      - 'Dockerfile.model-transparency.rh'
+      - 'renovate.json'
+      - '.tekton/**'
   workflow_dispatch:
 
 permissions: {}
