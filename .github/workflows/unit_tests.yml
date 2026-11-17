@@ -15,10 +15,18 @@
 name: Run unit tests
 on:
   pull_request:
-    branches: [main]
+    branches: [release-1.0]
     types: [opened, synchronize]
+    paths-ignore:
+      - 'Dockerfile.model-transparency.rh'
+      - 'renovate.json'
+      - '.tekton/**'
   push:
-    branches: [main]
+    branches: [release-1.0]
+    paths-ignore:
+      - 'Dockerfile.model-transparency.rh'
+      - 'renovate.json'
+      - '.tekton/**'
 
 permissions: {}
 
