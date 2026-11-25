@@ -36,9 +36,10 @@ classifiers = [
 dependencies = [
   "asn1crypto",
   "blake3",
-  "dnspython>=2.9.2; python_version>='3.11'",
+  "certifi>=2026.10.19",
   "click",
   "cryptography>=46.0.7",
+  "dnspython>=2.9.2; python_version>='3.11'",
   "in-toto-attestation",
   "oras>=0.2.30",
   "pyasn1>=0.6.4",
